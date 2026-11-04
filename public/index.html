@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Wordfeud-solver</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --cell: 38px;
+    --bg: #1e2229; --panel: #262b34; --line: #3a4150; --text: #e8eaf0; --dim: #9aa3b5;
+    --tile: #f2d8a0; --ghost: #7fb2f0; --own: #aef2a0; --opp: #f2a0a0;
+  }
+  * { box-sizing: border-box; }
+  #boardwrap { position: relative; }
+  .cell.wsel { outline: 3px solid #e05050; outline-offset: -2px; z-index: 2; }
+  #selbtns { position: absolute; display: none; z-index: 5; gap: 6px; }
+  #selbtns button { font-weight: 700; padding: 4px 8px; white-space: nowrap; }
+  #wdel { background: #8a3030; border-color: #a54040; }
+  #wdel:hover { background: #a03838; }
+  /* Pil met twee helften: groen = eigen (witte pion), rood = tegenstander
+     (zwarte pion), in exact de steenkleuren (--own/--opp). Beide helften
+     tonen dezelfde gevulde pion (U+265F); de CSS-kleur maakt 'm wit of
+     zwart — de losse glyfen ♙/♟ kleuren allebei mee met de tekstkleur en
+     ogen dan identiek. De witte pion krijgt een donker randje, anders valt
+     hij weg tegen de lichte steenkleur. */
+  #ownpill { display: flex; }
+  #ownpill button { font-size: 17px; line-height: 1; padding: 3px 10px 5px; }
+  #wown {
+    border-radius: 6px 0 0 6px; background: var(--own); border-color: #86c877;
+    color: #fff; -webkit-text-stroke: 1px #2a2418; text-shadow: 0 0 1px #2a2418;
+  }
+  #wown:hover { background: #9de68e; }
+  #wopp { border-radius: 0 6px 6px 0; border-left-width: 0; background: var(--opp); border-color: #d88888; color: #14100c; }
+  #wopp:hover { background: #e68e8e; }
+  #wown.active, #wopp.active { outline: 2px solid #f0c040; outline-offset: -2px; }
+  /* Modale ja/nee-dialoog in de paneelstijl (confirm() kent alleen OK/Annuleren) */
+  dialog {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 14px 16px; max-width: 360px;
+  }
+  dialog p { margin: 0 0 12px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .45); }
+  body {
+    margin: 0; padding: 18px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+    display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start;
+  }
+  h1 { font-size: 17px; margin: 0 0 10px; }
+  #boardwrap { user-select: none; }
+  #collabels { display: grid; grid-template-columns: 22px repeat(15, var(--cell)); gap: 2px; margin-bottom: 2px; }
+  #collabels div { text-align: center; color: var(--dim); font-size: 11px; line-height: 16px; }
+  .boardrow { display: grid; grid-template-columns: 22px repeat(15, var(--cell)); gap: 2px; margin-bottom: 2px; }
+  .rowlabel { color: var(--dim); font-size: 11px; display: flex; align-items: center; justify-content: center; }
+  .cell {
+    width: var(--cell); height: var(--cell); background: #303645; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center; position: relative;
+    cursor: pointer; font-size: 10px; color: #cfd6e4; font-weight: 600;
+  }
+  .cell.dl { background: #3d6b4f; } .cell.tl { background: #2d5a86; }
+  .cell.dw { background: #8a5a2d; } .cell.tw { background: #8a3030; }
+  .cell.center::after { content: "★"; color: #aab3c5; font-size: 14px; }
+  .cell.center.hastile::after, .cell.center.hasghost::after { content: ""; }
+  .cell.sel { outline: 3px solid #f0c040; outline-offset: -2px; z-index: 2; }
+  .cell .tile, .poolcell .tile {
+    position: absolute; inset: 1px; background: var(--tile); color: #2a2418; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(var(--cell) * .52); font-weight: 700; text-transform: uppercase;
+  }
+  .cell .tile.blank, .poolcell .tile.blank { background: #cfe3c0; }
+  .cell .tile.own { background: var(--own); } /* na .blank: eigen blanco toont ook groen, de 0 markeert 'm */
+  .cell .tile.opp { background: var(--opp); } /* idem: tegenstander-steen rood */
+  .cell .tile.ghost { background: var(--ghost); opacity: .92; color: #10233a; }
+  .cell .tile .val, .poolcell .tile .val { position: absolute; right: 2px; bottom: 0; font-size: 9px; font-weight: 600; }
+  .cell .dirmark { position: absolute; right: 2px; top: 1px; font-size: 11px; color: #f0c040; z-index: 3; }
+  #panel { width: 450px; max-width: 100%; display: flex; flex-direction: column; gap: 14px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .box h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 8px; }
+  button, select, input {
+    font: inherit; color: var(--text); background: #333a48; border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px;
+  }
+  button { cursor: pointer; } button:hover { background: #3d4657; }
+  button.primary { background: #2d5a86; border-color: #3a6ea0; }
+  button.primary:hover { background: #366a9d; }
+  #rack { width: 130px; text-transform: uppercase; letter-spacing: 4px; font-weight: 700; font-size: 18px; }
+  input[type=checkbox] { width: 16px; height: 16px; padding: 0; accent-color: #f0c040; flex-shrink: 0; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .modebtn.active { background: #f0c040; color: #201a08; border-color: #f0c040; font-weight: 700; }
+  #movewrap { max-height: 380px; overflow-y: auto; }
+  #movetable { width: 100%; border-collapse: collapse; }
+  #movetable th {
+    position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--dim);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    text-align: left; padding: 2px 8px 5px; white-space: nowrap; user-select: none;
+  }
+  #movetable th[data-key] { cursor: pointer; }
+  #movetable th[data-key]:hover { color: var(--text); }
+  #movetable td { padding: 4px 8px; }
+  #movetable .num { text-align: right; }
+  #movetable tbody tr { cursor: pointer; }
+  #movetable tbody tr:hover, #movetable tbody tr.active { background: #333a48; }
+  #movetable .w { font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  #movetable .w u { color: #9fd49f; }
+  #movetable .s { color: #f0c040; font-weight: 700; }
+  #movetable .p { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  #movetable .del {
+    background: none; border: none; padding: 0 4px;
+    font-size: 14px; opacity: .35; cursor: pointer;
+  }
+  #movetable tr:hover .del { opacity: .8; }
+  #movetable .del:hover { opacity: 1; background: none; }
+  #movetable.noopp .oppc { display: none; }
+  #movetable.noself .selfc { display: none; }
+  #movetable .oppc.dim, #movetable .oppc .dim,
+  #movetable .selfc.dim, #movetable .selfc .dim { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .spin {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--dim); border-top-color: transparent;
+    animation: spin 1s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Paneel "Resterende letters": 27 unieke stenen (a–z + blanco) in 9×3,
+     met dezelfde tile-graphic als het bord en het resterende aantal eronder. */
+  #pool { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; justify-items: center; }
+  #pool .poolitem { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .poolcell { position: relative; width: var(--cell); height: var(--cell); }
+  #pool .pcount { font-size: 11px; color: var(--dim); font-weight: 600; }
+  #pool .poolitem.gone { opacity: .25; }
+  /* Surplus: deze letter ligt vaker dan er stenen bestaan → daar zit een
+     afgeleide blanco van de tegenstander. Niet vervagen, telling rood. */
+  #pool .poolitem.over { opacity: 1; }
+  #pool .poolitem.over .pcount { color: #e05050; }
+  /* Paneel "Stenen van de tegenstander": één rack-rij; zekere stenen als
+     tile, onbekende plekken als gestippeld leeg vakje. */
+  #opptiles { display: flex; gap: 6px; flex-wrap: wrap; min-height: var(--cell); }
+  #opptiles .poolcell.unknown { border: 2px dashed var(--line); border-radius: 4px; }
+  /* Paneel "Stand": puntentotalen per speler + logboek van vastgelegde zetten. */
+  #scorebar { display: flex; gap: 10px; }
+  .scorehalf { flex: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border-radius: 6px; padding: 5px 10px; color: #14100c; font-weight: 700; }
+  .scorehalf.own { background: var(--own); }
+  .scorehalf.opp { background: var(--opp); }
+  .scorehalf .scorenum { font-size: 21px; }
+  #scorehist { margin-top: 8px; max-height: 160px; overflow-y: auto; }
+  .scoreentry { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 1px 2px; }
+  .scoreentry .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .scoreentry .dot.own { background: var(--own); }
+  .scoreentry .dot.opp { background: var(--opp); }
+  .scoreentry .sw { flex: 1; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; }
+  .scoreentry .ss { color: #f0c040; font-weight: 700; }
+  .scoreentry .del { background: none; border: none; padding: 0 4px; font-size: 13px; opacity: .35; cursor: pointer; }
+  .scoreentry:hover .del { opacity: .8; }
+  .scoreentry .del:hover { opacity: 1; background: none; }
+  #status { color: var(--dim); font-size: 12px; min-height: 16px; }
+  kbd { background: #333a48; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 11px; }
+  .help { color: var(--dim); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<div id="boardwrap">
+  <h1>Wordfeud-solver</h1>
+  <div id="collabels"></div>
+  <div id="board"></div>
+  <div id="status"></div>
+  <div id="selbtns">
+    <span id="ownpill">
+      <button id="wown" title="Geselecteerde stenen als eigen stenen markeren">&#x265f;&#xfe0e;</button>
+      <button id="wopp" title="Geselecteerde stenen als tegenstander-stenen markeren">&#x265f;&#xfe0e;</button>
+    </span>
+    <button id="wdel" title="Geselecteerd woord uit de woordenlijst verwijderen"></button>
+  </div>
+  <dialog id="keepdlg">
+    <p>Een deel van de geselecteerde stenen heeft al de andere kleur.<br>
+       Die markering behouden?</p>
+    <div class="row">
+      <button id="keep-yes" class="primary">Ja, behouden</button>
+      <button id="keep-no">Nee, alles overschrijven</button>
+    </div>
+  </dialog>
+</div>
+
+<div id="panel">
+  <div class="box">
+    <h2>Spel</h2>
+    <div class="row">
+      <select id="gamesel"></select>
+      <button id="newgame">Nieuw spel</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>Stand</h2>
+    <div id="scorebar">
+      <div class="scorehalf own"><span>Jij</span><span class="scorenum" id="scoreown">0</span></div>
+      <div class="scorehalf opp"><span>Tegenstander</span><span class="scorenum" id="scoreopp">0</span></div>
+    </div>
+    <div id="scorehist"></div>
+    <div class="help" id="scorehelp"></div>
+  </div>
+
+  <div class="box">
+    <h2>Invoer</h2>
+    <div class="row">
+      <button class="modebtn" id="mode-bonus">1. Bonussen</button>
+      <button class="modebtn" id="mode-letter">2. Letters</button>
+      <span style="flex:1"></span>
+      <button id="clearbonus" title="Alle bonusvelden wissen">Bonussen wissen</button>
+      <button id="stdbonus" title="Standaardbord voor de gekozen spelvariant">Standaard</button>
+    </div>
+    <div class="help" id="modehelp"></div>
+  </div>
+
+  <div class="box">
+    <h2>3. Jouw letters (<span id="rackcount">0</span>/7, ? = blanco)</h2>
+    <div class="row">
+      <input id="rack" maxlength="7" spellcheck="false" autocomplete="off">
+      <button class="primary" id="solve">Beste zetten</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>Stenen van de tegenstander (<span id="oppknown">0</span>/<span id="oppsize">7</span> zeker)</h2>
+    <div id="opptiles"></div>
+    <div class="help" id="opphelp"></div>
+  </div>
+
+  <div class="box">
+    <h2>Zetten <span id="solveinfo" style="text-transform:none"></span><span id="oppinfo" style="text-transform:none" title="Tegen-kolom: berekende zetten / geplande zetten"></span></h2>
+    <div id="movewrap">
+      <table id="movetable" hidden>
+        <thead><tr>
+          <th data-key="word" data-label="Woord">Woord</th>
+          <th data-key="score" data-label="Punten" class="num">Punten</th>
+          <th data-key="adj" data-label="Aangr." class="num" title="Aantal bestaande stenen op het bord dat aan de nieuwe letters grenst">Aangr.</th>
+          <th data-key="len" data-label="Lengte" class="num">Lengte</th>
+          <th data-key="own" data-label="Eigen" class="num" title="Aantal eigen stenen uit je rack dat deze zet legt">Eigen</th>
+          <th data-key="open" data-label="Open" class="num" title="Aantal lege vakjes dat na deze zet aan een bordsteen grenst — de plekken waar de tegenstander de eerste steen van een zet kan leggen (elk vakje telt één keer)">Open</th>
+          <th data-key="opp" data-label="Tegen" class="num oppc" title="Max. aantal woorden dat de tegenstander na deze zet kan spelen, over alle mogelijke rekken uit de resterende pot">Tegen</th>
+          <th data-key="self" data-label="Zelf" class="num selfc" title="Aantal woorden dat je zelf daarna nog kunt spelen: je overgebleven letters plus elke mogelijke bijtrekking uit de zak (min–max; bij lege zak exact één getal)">Zelf</th>
+          <th></th><th></th>
+        </tr></thead>
+        <tbody id="moves"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:8px" id="playrow" hidden>
+      <button class="primary" id="playmove">Zet spelen (bord + rack bijwerken)</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>Resterende letters (<span id="poolcount">104</span>)</h2>
+    <div id="pool"></div>
+    <div class="help">Pot + rack van de tegenstander: alle stenen van het spel (104 bij Wordfeud,
+      102 bij Scrabble) minus het bord en je eigen rack.
+      Ligt een letter vaker dan er stenen van bestaan, dan telt het surplus als blanco
+      van de tegenstander (eigen blanco's markeer je met <kbd>*</kbd>).</div>
+  </div>
+
+  <div class="box">
+    <h2>Instellingen</h2>
+    <div class="row">
+      <span>Spelvariant:</span>
+      <label style="cursor:pointer"><input type="radio" name="set-variant" value="wordfeud"> Wordfeud</label>
+      <label style="cursor:pointer"><input type="radio" name="set-variant" value="scrabble"> Scrabble</label>
+    </div>
+    <div class="help">Geldt voor het huidige spel. Scrabble: officiële NL-letterset (102 stenen,
+      andere waarden), bingo +50 en het vaste Scrabble-bord. Zolang er nog geen letters op het
+      bord liggen, wordt de bonusindeling automatisch mee omgezet.</div>
+    <label class="row" style="cursor:pointer">
+      <input type="checkbox" id="set-adjonly">
+      <span>Alleen zetten waarvan elke gespeelde steen aan een bordsteen grenst, met minstens 2 aangrenzende bordstenen (Aangr. ≥ 2)</span>
+    </label>
+    <label class="row" style="cursor:pointer">
+      <input type="checkbox" id="set-oppcol">
+      <span>Kolom "Tegen": max. aantal antwoordzetten van de tegenstander per zet, over alle mogelijke rekken uit de resterende pot (parallel berekend; 5 s rekentijd per rij, bij time-out een ondergrens ≥ met doorzocht %; zijn de getoonde rijen zonder time-outs klaar, dan rekent hij door met de rest van de zettenlijst)</span>
+    </label>
+    <label class="row" style="cursor:pointer">
+      <input type="checkbox" id="set-selfcol">
+      <span>Kolom "Zelf": aantal eigen vervolgzetten na deze zet — je overgebleven letters plus elke mogelijke bijtrekking uit de zak, als min–max (bij lege zak exact). Rekent mee in dezelfde rijberekening als "Tegen", met hetzelfde 5 s-budget per rij.</span>
+    </label>
+  </div>
+</div>
+
+<script>
+const SIZE = 15;
+// Letterwaarden en steenverdelingen per spelvariant — gelijk houden aan
+// VARIANTS in solver.mjs. Wordfeud: 104 stenen; Scrabble-NL: 102 stenen.
+const VARIANTS = {
+  wordfeud: {
+    values: { a:1,b:4,c:5,d:2,e:1,f:4,g:3,h:4,i:2,j:4,k:3,l:3,m:3,n:1,o:1,p:4,q:10,r:2,s:2,t:2,u:2,v:4,w:5,x:8,y:8,z:5 },
+    counts: { a:7,b:2,c:2,d:5,e:18,f:2,g:3,h:2,i:4,j:2,k:3,l:3,m:3,n:11,o:6,p:2,q:1,r:5,s:5,t:5,u:3,v:2,w:2,x:1,y:1,z:2,'?':2 },
+  },
+  scrabble: {
+    values: { a:1,b:3,c:5,d:2,e:1,f:4,g:3,h:4,i:1,j:4,k:3,l:3,m:3,n:1,o:1,p:3,q:10,r:2,s:2,t:2,u:4,v:4,w:5,x:8,y:8,z:4 },
+    counts: { a:6,b:2,c:2,d:5,e:18,f:2,g:3,h:2,i:4,j:2,k:3,l:3,m:3,n:10,o:6,p:2,q:1,r:5,s:5,t:5,u:3,v:2,w:2,x:1,y:1,z:2,'?':2 },
+  },
+};
+const curVariant = () => VARIANTS[game && game.variant] || VARIANTS.wordfeud;
+const COLS = 'ABCDEFGHIJKLMNO';
+
+let game = null;          // {id, name, board:{size,bonus,tiles}, rack}
+let games = [];
+let sel = null;           // {r, c}
+let dir = 'h';
+let mode = 'letter';      // 'bonus' | 'letter'
+let pendingBonus = '';    // 'd' of 't'
+let allMoves = [];        // volledige solve-uitkomst
+let moves = [];           // wat de tabel toont (allMoves, evt. gefilterd)
+let lastMs = 0;
+let previewIdx = -1;
+const settings = {
+  adjOnly: localStorage.getItem('adjOnly') === '1',
+  oppCol: localStorage.getItem('oppCol') === '1',
+  selfCol: localStorage.getItem('selfCol') === '1',
+};
+let saveTimer = null;
+let wordSel = null;       // {r0,c0,r1,c1} genormaliseerd — sleep-selectie van een bordwoord
+let drag = null;          // {r,c} startcel van een muis-sleep
+let dragged = false;      // is er tijdens deze sleep over een andere cel bewogen?
+let suppressClick = false;
+
+const $ = (id) => document.getElementById(id);
+const idx = (r, c) => r * SIZE + c;
+
+// ---- opbouw grid ----
+const boardEl = $('board');
+const cells = [];
+{
+  const lab = $('collabels');
+  lab.appendChild(document.createElement('div'));
+  for (let c = 0; c < SIZE; c++) { const d = document.createElement('div'); d.textContent = COLS[c]; lab.appendChild(d); }
+  for (let r = 0; r < SIZE; r++) {
+    const row = document.createElement('div');
+    row.className = 'boardrow';
+    const rl = document.createElement('div');
+    rl.className = 'rowlabel'; rl.textContent = r + 1;
+    row.appendChild(rl);
+    for (let c = 0; c < SIZE; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.addEventListener('click', () => onCellClick(r, c));
+      cell.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        drag = { r, c }; dragged = false; suppressClick = false;
+        if (wordSel) { wordSel = null; render(); updateWordSelUI(); }
+      });
+      cell.addEventListener('mouseenter', () => {
+        if (!drag) return;
+        if (r !== drag.r || c !== drag.c) dragged = true;
+        if (r === drag.r || c === drag.c) { // alleen één rij of één kolom
+          wordSel = {
+            r0: Math.min(drag.r, r), r1: Math.max(drag.r, r),
+            c0: Math.min(drag.c, c), c1: Math.max(drag.c, c),
+          };
+          render();
+        }
+      });
+      row.appendChild(cell);
+      cells[idx(r, c)] = cell;
+    }
+    boardEl.appendChild(row);
+  }
+}
+
+// Slepen over een rij of kolom selecteert dat bordwoord (rood kader) met een
+// verwijderknop — voor kruiswoorden die Wordfeud niet accepteert en die niet
+// in de zettenlijst staan.
+document.addEventListener('mouseup', () => {
+  if (!drag) return;
+  drag = null;
+  if (!dragged) { wordSel = null; updateWordSelUI(); return; } // gewone klik
+  suppressClick = true; // click-event na een sleep negeren
+  if (!wordSelWord()) wordSel = null; // ongeldig: gat/lege cel of maar 1 letter
+  render(); updateWordSelUI();
+});
+
+// ---- paneel "Resterende letters" ----
+// 27 unieke stenen (a–z + blanco), eenmalig opgebouwd; renderPool() werkt
+// alleen de aantallen bij. Blanco = lege groene steen, zoals op het bord.
+const poolEls = new Map();
+{
+  const pool = $('pool');
+  for (const ch of [...'abcdefghijklmnopqrstuvwxyz', '?']) {
+    const item = document.createElement('div');
+    item.className = 'poolitem';
+    item.title = ch === '?' ? 'blanco' : ch.toUpperCase();
+    const cell = document.createElement('div');
+    cell.className = 'poolcell';
+    const t = document.createElement('div');
+    t.className = 'tile' + (ch === '?' ? ' blank' : '');
+    t.textContent = ch === '?' ? '' : ch;
+    const v = document.createElement('span');
+    v.className = 'val'; // waarde wordt in renderPool() gezet (variant-afhankelijk)
+    t.appendChild(v);
+    cell.appendChild(t);
+    const cnt = document.createElement('div');
+    cnt.className = 'pcount';
+    item.append(cell, cnt);
+    pool.appendChild(item);
+    poolEls.set(ch, { item, cnt, val: v });
+  }
+}
+
+// Resterend = 104 stenen minus bord (blanco's als '?') minus eigen rack
+// (= pot + rack van de tegenstander), zoals remainingPool() in solver.mjs —
+// zelfde semantiek houden. Blanco-inferentie: een letter die vaker ligt dan
+// de verdeling heeft, is een ongemarkeerde blanco van de tegenstander; het
+// surplus gaat van de blanco-voorraad af (eigen blanco's zijn al expliciet
+// gemarkeerd en tellen eerst). Blijft het dan nog inconsistent: stop op 0.
+// Geeft naast de telling ook het surplus per letter terug, zodat de UI kan
+// tonen wáár de afgeleide blanco('s) zitten.
+function poolCount() {
+  const left = { ...curVariant().counts };
+  const over = {};
+  const take = (ch) => {
+    if (left[ch] == null) return;
+    if (left[ch] > 0) left[ch]--;
+    else if (ch !== '?') over[ch] = (over[ch] || 0) + 1;
+  };
+  for (const t of game.board.tiles) if (t) take(t.blank ? '?' : t.letter);
+  for (const ch of game.rack || '') take(ch);
+  const surplus = Object.values(over).reduce((a, b) => a + b, 0);
+  left['?'] = Math.max(0, left['?'] - surplus);
+  return { left, over };
+}
+
+function renderPool() {
+  const { left, over } = poolCount();
+  const values = curVariant().values;
+  let total = 0;
+  for (const [ch, { item, cnt, val }] of poolEls) {
+    const n = left[ch];
+    total += n;
+    cnt.textContent = n;
+    val.textContent = ch === '?' ? 0 : values[ch];
+    item.classList.toggle('gone', n === 0);
+    item.classList.toggle('over', !!over[ch]);
+    item.title = over[ch]
+      ? `${ch.toUpperCase()}: ${over[ch]}× vaker in het spel dan er stenen bestaan — geteld als blanco van de tegenstander. Markeer de betreffende steen met * om hem ook 0 punten te laten tellen.`
+      : (ch === '?' ? 'blanco' : ch.toUpperCase());
+  }
+  $('poolcount').textContent = total;
+  renderOppRack(left, values);
+}
+
+// ---- paneel "Stenen van de tegenstander" ----
+// Zelfde afleiding als certainOpponentTiles() in solver.mjs — gelijk houden.
+// De pot (= zak + rack tegenstander) telt `total` stenen; de tegenstander
+// houdt er min(7, total) vast, de rest zit in de zak. Elke letter die vaker
+// in de pot zit dan er zakstenen zijn, ligt dus zeker op zijn rack.
+function renderOppRack(left, values) {
+  const total = Object.values(left).reduce((a, b) => a + b, 0);
+  const oppSize = Math.min(7, total);
+  const bag = total - oppSize;
+  const certain = [];
+  for (const ch of [...'abcdefghijklmnopqrstuvwxyz', '?'])
+    for (let i = (left[ch] || 0) - bag; i > 0; i--) certain.push(ch);
+  const wrap = $('opptiles');
+  wrap.innerHTML = '';
+  for (let i = 0; i < oppSize; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'poolcell';
+    if (i < certain.length) {
+      const ch = certain[i];
+      const t = document.createElement('div');
+      t.className = 'tile' + (ch === '?' ? ' blank' : '');
+      t.textContent = ch === '?' ? '' : ch;
+      t.title = ch === '?' ? 'blanco' : ch.toUpperCase();
+      const v = document.createElement('span');
+      v.className = 'val';
+      v.textContent = ch === '?' ? 0 : values[ch];
+      t.appendChild(v);
+      cell.appendChild(t);
+    } else {
+      cell.classList.add('unknown');
+      cell.title = 'onbekend — kan nog elke steen uit de pot zijn';
+    }
+    wrap.appendChild(cell);
+  }
+  $('oppknown').textContent = certain.length;
+  $('oppsize').textContent = oppSize;
+  $('opphelp').textContent = bag === 0
+    ? (total ? 'De zak is leeg: dit zijn precies de stenen van de tegenstander.'
+             : 'Er zijn geen stenen meer over.')
+    : certain.length
+      ? `Nog ${bag} steen${bag === 1 ? '' : 'en'} in de zak: deze letters zitten vaker in de pot dan er zakstenen zijn en liggen dus zeker op het rack van de tegenstander.`
+      : `Nog ${bag} stenen in de zak — zodra een letter vaker in de pot zit dan er zakstenen zijn, verschijnt hij hier als zekere steen van de tegenstander.`;
+}
+
+// ---- paneel "Stand" ----
+// Puntentelling per speler uit game.history: één regel per vastgelegde zet
+// ({player: 'own'|'opp', word, score, cells}). "Zet spelen" legt eigen zetten
+// automatisch vast (de score staat al in de zettenlijst); handmatig ingevoerde
+// woorden leg je vast door ze met de pionknoppen te markeren — de stenen in de
+// selectie die nog aan geen zet toegekend zijn, gelden dan als de nieuw
+// gelegde stenen en scoreMove uit solver.mjs berekent de score op het bord
+// zónder die stenen (bonussen tellen zo alleen op de nieuwe stenen).
+let solverModPromise = null;
+const loadSolver = () => (solverModPromise ??= import('/solver.mjs'));
+
+function assignedCells() {
+  const s = new Set();
+  for (const h of game.history || []) for (const i of h.cells || []) s.add(i);
+  return s;
+}
+
+function renderScore() {
+  const hist = game.history || [];
+  const tot = { own: 0, opp: 0 };
+  for (const h of hist) tot[h.player] = (tot[h.player] || 0) + h.score;
+  $('scoreown').textContent = tot.own;
+  $('scoreopp').textContent = tot.opp;
+  const wrap = $('scorehist');
+  wrap.innerHTML = '';
+  hist.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'scoreentry';
+    const dot = document.createElement('span');
+    dot.className = 'dot ' + h.player;
+    dot.title = h.player === 'own' ? 'eigen zet' : 'zet van de tegenstander';
+    const w = document.createElement('span');
+    w.className = 'sw';
+    w.textContent = h.word;
+    const s = document.createElement('span');
+    s.className = 'ss';
+    s.textContent = h.score;
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '🗑';
+    del.title = 'Deze zet uit de telling halen (de stenen blijven op het bord)';
+    del.addEventListener('click', () => { game.history.splice(i, 1); touch(); });
+    row.append(dot, w, s, del);
+    wrap.appendChild(row);
+  });
+  // Stenen die in geen enkele vastgelegde zet zitten, tellen nergens mee —
+  // dat is de normale toestand van spellen van vóór dit paneel.
+  const assigned = assignedCells();
+  let loose = 0;
+  game.board.tiles.forEach((t, i) => { if (t && !assigned.has(i)) loose++; });
+  $('scorehelp').textContent = loose
+    ? `${loose} ${loose === 1 ? 'steen op het bord telt' : 'stenen op het bord tellen'} nog niet mee — sleep per zet over het gelegde woord en markeer het met de pionknoppen om de zet in de telling op te nemen.`
+    : (hist.length ? '' : 'Nog geen zetten vastgelegd. "Zet spelen" telt eigen zetten automatisch mee; handmatig ingevoerde woorden markeer je met de pionknoppen (sleep over het woord).');
+}
+
+// Het hoofdwoord dat een set nieuwe stenen op het huidige bord vormt: de
+// aaneengesloten lijn door die stenen heen (inclusief bestaande buurstenen).
+// Bij één losse steen wint de langste van de twee richtingen.
+function mainWordAt(cellIdxs) {
+  const run = (r, c, dr, dc) => {
+    while (r - dr >= 0 && c - dc >= 0 && game.board.tiles[idx(r - dr, c - dc)]) { r -= dr; c -= dc; }
+    let w = '';
+    while (r < SIZE && c < SIZE && game.board.tiles[idx(r, c)]) { w += game.board.tiles[idx(r, c)].letter; r += dr; c += dc; }
+    return w;
+  };
+  const r0 = Math.floor(cellIdxs[0] / SIZE), c0 = cellIdxs[0] % SIZE;
+  const h = run(r0, c0, 0, 1), v = run(r0, c0, 1, 0);
+  if (cellIdxs.length > 1) {
+    const oneRow = cellIdxs.every((i) => Math.floor(i / SIZE) === r0);
+    return oneRow ? h : v;
+  }
+  return v.length > h.length ? v : h;
+}
+
+// Zet vastleggen vanuit een pion-markering: `cellIdxs` zijn de gemarkeerde
+// stenen die nog aan geen enkele zet toegekend waren.
+async function recordMarkedMove(player, cellIdxs) {
+  if (cellIdxs.length > 7) {
+    $('status').textContent = `markering niet als zet geteld: ${cellIdxs.length} nieuwe stenen (een zet legt er hooguit 7) — markeer per zet één woord`;
+    return;
+  }
+  const placed = cellIdxs.map((i) => {
+    const t = game.board.tiles[i];
+    return { row: Math.floor(i / SIZE), col: i % SIZE, letter: t.letter, blank: !!t.blank };
+  });
+  const cellSet = new Set(cellIdxs);
+  const before = { ...game.board, tiles: game.board.tiles.map((t, i) => (cellSet.has(i) ? null : t)) };
+  try {
+    const { scoreMove } = await loadSolver();
+    const score = scoreMove(before, placed, game.variant || 'wordfeud');
+    (game.history ??= []).push({ player, word: mainWordAt(cellIdxs), score, cells: cellIdxs });
+    renderScore();
+  } catch (e) {
+    $('status').textContent = 'score berekenen mislukt: ' + e.message;
+  }
+}
+
+// Steen op (r,c): echt gelegd, of anders de ghost van de voorproef-zet.
+function tileAt(r, c) {
+  const t = game.board.tiles[idx(r, c)];
+  if (t) return t;
+  const m = previewIdx >= 0 ? moves[previewIdx] : null;
+  if (m) for (const p of m.placed) if (p.row === r && p.col === c) return p;
+  return null;
+}
+
+// De letters van de huidige sleep-selectie, of null als daar geen aaneen-
+// gesloten woord van ≥2 stenen (incl. voorproef) ligt.
+function wordSelWord() {
+  if (!wordSel) return null;
+  const letters = [];
+  for (let r = wordSel.r0; r <= wordSel.r1; r++)
+    for (let c = wordSel.c0; c <= wordSel.c1; c++) {
+      const t = tileAt(r, c);
+      if (!t) return null;
+      letters.push(t.letter);
+    }
+  return letters.length >= 2 ? letters.join('') : null;
+}
+
+// De échte bordstenen in de huidige sleep-selectie (voorproef-stenen niet:
+// die staan nog niet in game.board en hebben dus geen own-vlag om te togglen).
+function wordSelTiles() {
+  if (!wordSel) return [];
+  const tiles = [];
+  for (let r = wordSel.r0; r <= wordSel.r1; r++)
+    for (let c = wordSel.c0; c <= wordSel.c1; c++) {
+      const t = game.board.tiles[idx(r, c)];
+      if (t) tiles.push(t);
+    }
+  return tiles;
+}
+
+// Als wordSelTiles, maar dan de celindexen (voor de zet-vastlegging in de Stand).
+function wordSelTileIdxs() {
+  if (!wordSel) return [];
+  const out = [];
+  for (let r = wordSel.r0; r <= wordSel.r1; r++)
+    for (let c = wordSel.c0; c <= wordSel.c1; c++)
+      if (game.board.tiles[idx(r, c)]) out.push(idx(r, c));
+  return out;
+}
+
+function updateWordSelUI() {
+  const box = $('selbtns');
+  const word = drag ? null : wordSelWord(); // pas tonen na loslaten
+  if (!word) { box.style.display = 'none'; return; }
+  const btn = $('wdel');
+  btn.textContent = `🗑 ${word.toUpperCase()}`;
+  btn.title = `"${word}" uit de woordenlijst verwijderen`;
+  const tiles = wordSelTiles();
+  $('ownpill').style.display = tiles.length ? '' : 'none';
+  if (tiles.length) {
+    const allOwn = tiles.every((t) => t.own);
+    const allOpp = tiles.every((t) => t.opp);
+    $('wown').classList.toggle('active', allOwn);
+    $('wopp').classList.toggle('active', allOpp);
+    $('wown').title = allOwn
+      ? 'Eigen-markering van de geselecteerde stenen weghalen'
+      : 'Geselecteerde stenen als eigen stenen markeren (groen)';
+    $('wopp').title = allOpp
+      ? 'Tegenstander-markering van de geselecteerde stenen weghalen'
+      : 'Geselecteerde stenen als tegenstander-stenen markeren (rood)';
+  }
+  const wrap = $('boardwrap').getBoundingClientRect();
+  const rc = cells[idx(wordSel.r1, wordSel.c1)].getBoundingClientRect();
+  box.style.left = Math.min(rc.left - wrap.left, wrap.width - 180) + 'px';
+  box.style.top = (rc.bottom - wrap.top + 4) + 'px';
+  box.style.display = 'flex';
+}
+
+function onCellClick(r, c) {
+  if (suppressClick) { suppressClick = false; return; }
+  if (sel && sel.r === r && sel.c === c && mode === 'letter') {
+    dir = dir === 'h' ? 'v' : 'h'; // nogmaals klikken: typrichting wisselen
+  } else {
+    sel = { r, c };
+  }
+  pendingBonus = '';
+  render();
+}
+
+// ---- renderen ----
+function render() {
+  const b = game.board;
+  const previewTiles = new Map();
+  if (previewIdx >= 0 && moves[previewIdx])
+    for (const p of moves[previewIdx].placed) previewTiles.set(idx(p.row, p.col), p);
+
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+    const i = idx(r, c);
+    const cell = cells[i];
+    const bonus = b.bonus[i];
+    cell.className = 'cell' + (bonus ? ' ' + bonus : '');
+    if (r === 7 && c === 7) cell.classList.add('center');
+    cell.textContent = bonus ? bonus.toUpperCase() : '';
+
+    const t = b.tiles[i] || previewTiles.get(i);
+    if (t) {
+      cell.classList.add(b.tiles[i] ? 'hastile' : 'hasghost');
+      const d = document.createElement('div');
+      d.className = 'tile' + (t.blank ? ' blank' : '') + (t.own ? ' own' : '') + (t.opp ? ' opp' : '') + (b.tiles[i] ? '' : ' ghost');
+      d.textContent = t.letter;
+      const v = document.createElement('span');
+      v.className = 'val';
+      v.textContent = t.blank ? 0 : curVariant().values[t.letter];
+      d.appendChild(v);
+      cell.appendChild(d);
+    }
+    if (wordSel && r >= wordSel.r0 && r <= wordSel.r1 && c >= wordSel.c0 && c <= wordSel.c1)
+      cell.classList.add('wsel');
+    if (sel && sel.r === r && sel.c === c) {
+      cell.classList.add('sel');
+      if (mode === 'letter') {
+        const m = document.createElement('div');
+        m.className = 'dirmark';
+        m.textContent = dir === 'h' ? '→' : '↓';
+        cell.appendChild(m);
+      }
+    }
+  }
+
+  $('mode-bonus').classList.toggle('active', mode === 'bonus');
+  $('mode-letter').classList.toggle('active', mode === 'letter');
+  $('modehelp').innerHTML = mode === 'bonus'
+    ? 'Klik een vak en typ <kbd>DL</kbd> <kbd>TL</kbd> <kbd>DW</kbd> <kbd>TW</kbd>. <kbd>Backspace</kbd> wist. <kbd>Tab</kbd> wisselt modus.'
+    : 'Klik een vak en typ letters (<kbd>*</kbd> = blanco aan/uit, <kbd>Backspace</kbd> wist). Nogmaals klikken wisselt →/↓. <kbd>Tab</kbd> wisselt modus. Sleep over een bordwoord om het uit de woordenlijst te schrappen of de stenen te markeren als eigen (groen) of van de tegenstander (rood).';
+  $('rackcount').textContent = (game.rack || '').length;
+  for (const el of document.querySelectorAll('input[name="set-variant"]'))
+    el.checked = el.value === (game.variant || 'wordfeud');
+  renderPool();
+  renderScore();
+
+  const selEl = $('gamesel');
+  selEl.innerHTML = '';
+  for (const g of games) {
+    const o = document.createElement('option');
+    o.value = g.id;
+    o.textContent = g.name;
+    if (g.id === game.id) o.selected = true;
+    selEl.appendChild(o);
+  }
+}
+
+// Aantal bestaande bordstenen dat (orthogonaal) aan de nieuw gelegde letters grenst.
+function adjCount(m) {
+  const seen = new Set();
+  for (const p of m.placed) {
+    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const r = p.row + dr, c = p.col + dc;
+      if (r < 0 || c < 0 || r >= SIZE || c >= SIZE) continue;
+      if (game.board.tiles[idx(r, c)]) seen.add(idx(r, c));
+    }
+  }
+  return seen.size;
+}
+
+// Aantal lege vakjes dat ná deze zet (orthogonaal) aan een bordsteen grenst:
+// de plekken waar de tegenstander de eerste steen van een zet kan leggen.
+// Elk vakje telt één keer, ook als het aan meerdere stenen grenst.
+function openCount(m) {
+  const placed = new Set(m.placed.map((p) => idx(p.row, p.col)));
+  const occ = (r, c) => !!game.board.tiles[idx(r, c)] || placed.has(idx(r, c));
+  let n = 0;
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+    if (occ(r, c)) continue;
+    const open = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dr, dc]) => {
+      const rr = r + dr, cc = c + dc;
+      return rr >= 0 && cc >= 0 && rr < SIZE && cc < SIZE && occ(rr, cc);
+    });
+    if (open) n++;
+  }
+  return n;
+}
+
+// Grenst deze gelegde steen (orthogonaal) aan een al bestaande bordsteen?
+function touchesBoard(p) {
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dr, dc]) => {
+    const r = p.row + dr, c = p.col + dc;
+    return r >= 0 && c >= 0 && r < SIZE && c < SIZE && game.board.tiles[idx(r, c)];
+  });
+}
+
+// Zetten-tabel opnieuw vullen vanuit allMoves, met de instellingen toegepast.
+function applyFilter() {
+  const cur = previewIdx >= 0 ? moves[previewIdx] : null;
+  moves = settings.adjOnly ? allMoves.filter((m) => m.allAdj && m.adj >= 2) : allMoves.slice();
+  previewIdx = cur ? moves.indexOf(cur) : -1;
+  sortMoves();
+  $('playrow').hidden = previewIdx < 0;
+  const filtered = moves.length < allMoves.length ? `${moves.length} van ${allMoves.length}` : `${moves.length}`;
+  $('solveinfo').textContent = allMoves.length
+    ? `(${filtered} opties${moves.length > MAX_ROWS ? `, top ${MAX_ROWS} getoond` : ''}, ${lastMs} ms)`
+    : '(geen zet mogelijk)';
+  renderMoves();
+}
+
+let sortKey = 'score', sortAsc = false;
+
+function sortMoves() {
+  const cur = previewIdx >= 0 ? moves[previewIdx] : null;
+  const dir = sortAsc ? 1 : -1;
+  const calcVal = (m, k) => (typeof m[k] === 'number' ? m[k] : -1); // nog niet berekend: onderaan
+  moves.sort((a, b) => {
+    const d = sortKey === 'word' ? a.word.localeCompare(b.word)
+      : sortKey === 'opp' || sortKey === 'self' ? calcVal(a, sortKey) - calcVal(b, sortKey)
+      : a[sortKey] - b[sortKey];
+    return d * dir || b.score - a.score;
+  });
+  previewIdx = cur ? moves.indexOf(cur) : -1;
+}
+
+for (const th of document.querySelectorAll('#movetable th[data-key]')) {
+  th.addEventListener('click', () => {
+    const k = th.dataset.key;
+    if (sortKey === k) sortAsc = !sortAsc;
+    else { sortKey = k; sortAsc = false; }
+    sortMoves(); renderMoves();
+    startOpp(); // nieuwe tabelvolgorde = nieuwe rekenprioriteit
+  });
+}
+
+// Alle zetten worden gesorteerd, maar alleen de top wordt getoond
+// zodat de tabel snel blijft bij duizenden opties.
+const MAX_ROWS = 200;
+
+function renderMoves() {
+  $('movetable').hidden = !moves.length;
+  for (const th of document.querySelectorAll('#movetable th[data-key]'))
+    th.textContent = th.dataset.label + (th.dataset.key === sortKey ? (sortAsc ? ' ▲' : ' ▼') : '');
+  const tb = $('moves');
+  tb.innerHTML = '';
+  moves.slice(0, MAX_ROWS).forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.classList.toggle('active', i === previewIdx);
+    const w = document.createElement('td');
+    w.className = 'w';
+    // blanco's onderstreept tonen
+    let k = 0;
+    const placedAt = new Map(m.placed.map((p) => [`${p.row},${p.col}`, p]));
+    w.innerHTML = [...m.word].map((ch) => {
+      const r = m.dir === 'h' ? m.row : m.row + k;
+      const c = m.dir === 'h' ? m.col + k : m.col;
+      k++;
+      const p = placedAt.get(`${r},${c}`);
+      return p && p.blank ? `<u>${ch}</u>` : ch;
+    }).join('');
+    const s = document.createElement('td');
+    s.className = 's num'; s.textContent = m.score;
+    const adj = document.createElement('td');
+    adj.className = 'num'; adj.textContent = m.adj;
+    const len = document.createElement('td');
+    len.className = 'num'; len.textContent = m.len;
+    const own = document.createElement('td');
+    own.className = 'num'; own.textContent = m.own;
+    const open = document.createElement('td');
+    open.className = 'num'; open.textContent = m.open;
+    const opp = document.createElement('td');
+    fillOppCell(opp, m);
+    m._oppTd = opp; // voor losse cel-updates zonder hele tabel-rebuild
+    const slf = document.createElement('td');
+    fillSelfCell(slf, m);
+    m._selfTd = slf;
+    const p = document.createElement('td');
+    p.className = 'p';
+    p.textContent = `${COLS[m.col]}${m.row + 1} ${m.dir === 'h' ? '→' : '↓'}`;
+    const dtd = document.createElement('td');
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '🗑';
+    del.title = `"${m.word}" uit de woordenlijst verwijderen`;
+    del.addEventListener('click', (e) => { e.stopPropagation(); removeWord(m.word); });
+    dtd.appendChild(del);
+    tr.append(w, s, adj, len, own, open, opp, slf, p, dtd);
+    tr.addEventListener('click', () => { previewIdx = i; render(); renderMoves(); $('playrow').hidden = false; updateWordSelUI(); });
+    tb.appendChild(tr);
+  });
+}
+
+// Woord schrappen dat Wordfeud niet accepteert: uit words.txt + removed.txt
+// op de server, en alle zetten met dat woord uit de huidige lijst.
+async function removeWord(word) {
+  if (!confirm(`"${word.toUpperCase()}" definitief uit de woordenlijst verwijderen?\n(Voor woorden die Wordfeud niet accepteert.)`)) return false;
+  try {
+    const r = await fetch('/api/remove-word', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ word }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    const cur = moves[previewIdx];
+    allMoves = allMoves.filter((m) => m.word !== word);
+    moves = moves.filter((m) => m.word !== word);
+    previewIdx = cur ? moves.indexOf(cur) : -1;
+    $('playrow').hidden = previewIdx < 0;
+    $('status').textContent = data.removed ? `"${word}" verwijderd uit de woordenlijst` : `"${word}" stond niet (meer) in de lijst`;
+    renderMoves(); render();
+    startOpp(); // rijen die de top-200 in schuiven meenemen
+    return true;
+  } catch (e) {
+    $('status').textContent = 'verwijderen mislukt: ' + e.message;
+    return false;
+  }
+}
+
+$('wdel').addEventListener('click', async () => {
+  const word = wordSelWord();
+  if (!word) return;
+  if (await removeWord(word)) { wordSel = null; render(); updateWordSelUI(); }
+});
+
+// Markering achteraf: groen (own) = zelf gelegd, rood (opp) = door de
+// tegenstander. De vlaggen sluiten elkaar uit; klikken op een helft die al
+// op de hele selectie staat, haalt de markering weg. Heeft een deel van de
+// selectie al de ándere kleur, dan vraagt de ja/nee-dialoog hieronder of
+// die behouden moet blijven. Bewust geen touch(): de selectie moet blijven
+// staan zodat nogmaals klikken terugdraait.
+// Ja/nee-dialoog met echte knoppen. Ja → true, nee → false, Esc/sluiten →
+// null (hele actie afbreken). showModal maakt de rest van de pagina inert,
+// dus de selectie kan intussen niet veranderen.
+function askKeep() {
+  return new Promise((resolve) => {
+    const dlg = $('keepdlg');
+    let choice = null;
+    $('keep-yes').onclick = () => { choice = true; dlg.close(); };
+    $('keep-no').onclick = () => { choice = false; dlg.close(); };
+    dlg.onclose = () => resolve(choice);
+    dlg.showModal();
+  });
+}
+
+async function markSel(flag) {
+  const tiles = wordSelTiles();
+  if (!tiles.length) return;
+  const other = flag === 'own' ? 'opp' : 'own';
+  const val = !tiles.every((t) => t[flag]);
+  let keep = false;
+  if (val && tiles.some((t) => t[other])) {
+    keep = await askKeep();
+    if (keep === null) return; // afgebroken: niets veranderen
+  }
+  for (const t of tiles) {
+    if (keep && t[other]) continue;
+    delete t.own; delete t.opp;
+    if (val) t[flag] = true;
+  }
+  // Gemarkeerde stenen die nog aan geen zet toegekend zijn, vormen samen de
+  // zojuist ingevoerde zet: vastleggen in de Stand. (Her-markeren van al
+  // getelde stenen of het weghalen van een markering telt dus niets dubbel.)
+  if (val) {
+    const assigned = assignedCells();
+    const fresh = wordSelTileIdxs().filter((i) => game.board.tiles[i][flag] && !assigned.has(i));
+    if (fresh.length) await recordMarkedMove(flag, fresh);
+  }
+  render(); updateWordSelUI();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 400);
+}
+$('wown').addEventListener('click', () => markSel('own'));
+$('wopp').addEventListener('click', () => markSel('opp'));
+
+// ---- muteren + opslaan ----
+function touch() {
+  if (wordSel) { wordSel = null; updateWordSelUI(); } // bordwijziging maakt selectie ongeldig
+  render();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 400);
+}
+
+async function save() {
+  $('status').textContent = 'opslaan…';
+  try {
+    const r = await fetch('/api/save', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ game }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error);
+    $('status').textContent = 'opgeslagen';
+  } catch (e) {
+    $('status').textContent = 'opslaan mislukt: ' + e.message;
+  }
+}
+
+function clearPreview() { previewIdx = -1; moves = []; allMoves = []; cancelOpp(); renderMoves(); $('playrow').hidden = true; $('solveinfo').textContent = ''; }
+
+// ---- kolom "Tegen": tegenstander-analyse in een workerpool ----
+// Per zet berekent een worker het max. aantal antwoordzetten van de
+// tegenstander over alle mogelijke rekken uit de resterende pot (5 s per rij;
+// bij time-out is de uitkomst een ondergrens). De rijen gaan dynamisch — één
+// per bericht — naar een pool van workers, in tabelvolgorde. Zijn de getoonde
+// top-200-rijen klaar zonder time-outs (dus: de pot is klein genoeg om per
+// rij uitputtend te doorzoeken), dan rekenen de workers door met de rest van
+// de zettenlijst, zodat sorteren op "Tegen" over álle zetten gaat.
+// Zie solver.worker.mjs voor het rijprotocol.
+let oppJobSeq = 0, oppJob = null;
+let lastSolveRack = ''; // rack waarmee de huidige zettenlijst berekend is
+
+// Pool: de bestaande solve-worker (heeft zijn trie al) plus extra workers,
+// elk met een eigen trie (~55 MB, eenmalig ~0,5 s bouwen — 'warmup' start
+// dat alvast). Gemaximeerd zodat er cores overblijven voor UI en systeem.
+let oppPool = null;
+function getOppPool() {
+  if (!oppPool) {
+    const n = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
+    oppPool = [getSolverWorker()];
+    for (let i = 1; i < n; i++) {
+      const w = new Worker('/solver.worker.mjs', { type: 'module' });
+      w.onmessage = (e) => { if (String(e.data.type || '').startsWith('opp-')) onOppMessage(e.data, w); };
+      w.postMessage({ type: 'warmup' });
+      oppPool.push(w);
+    }
+  }
+  return oppPool;
+}
+
+function cancelOpp() {
+  if (!oppJob) return;
+  for (const w of getOppPool()) w.postMessage({ type: 'opp-cancel', id: oppJob.id });
+  for (const m of oppJob.rows) { delete m.oppQueued; delete m.oppLive; delete m.selfLive; }
+  for (const m of oppJob.secondary) { delete m.oppQueued; delete m.oppLive; delete m.selfLive; }
+  oppJob = null;
+  updateOppInfo();
+}
+
+// Wat moet er voor deze zet nog berekend worden, gegeven de ingeschakelde
+// kolommen? (Al berekende delen blijven staan en worden overgeslagen.)
+const rowNeedsOpp = (m) => settings.oppCol && typeof m.opp !== 'number';
+const rowNeedsSelf = (m) => settings.selfCol && typeof m.self !== 'number';
+const rowNeedsCalc = (m) => rowNeedsOpp(m) || rowNeedsSelf(m);
+
+// Start (of herstart) de berekening, in tabelvolgorde. Rijen die al een
+// uitkomst hebben worden overgeslagen; de zetten buiten de top-200 staan als
+// tweede fase klaar.
+function startOpp() {
+  cancelOpp();
+  if ((!settings.oppCol && !settings.selfCol) || !moves.length) { renderMoves(); return; }
+  const primary = moves.slice(0, MAX_ROWS).filter(rowNeedsCalc);
+  const secondary = moves.slice(MAX_ROWS).filter(rowNeedsCalc);
+  if (!primary.length && !secondary.length) { renderMoves(); return; }
+  for (const m of primary) m.oppQueued = true;
+  oppJob = {
+    id: ++oppJobSeq, rows: primary, secondary, next: 0, done: 0,
+    // Al eerder getime-oute rijen in de top-200 blokkeren fase 2 ook.
+    timedOut: moves.slice(0, MAX_ROWS).some((m) => m.oppTimedOut || m.selfTimedOut), idle: [],
+    // Snapshot van de spelsituatie: elke bord/rack-wijziging cancelt de job.
+    board: game.board, rack: lastSolveRack, variant: game.variant || 'wordfeud',
+  };
+  if (!oppJob.rows.length) promoteSecondary(); // top-200 al klaar: meteen fase 2
+  if (!oppJob.rows.length) { oppJob = null; renderMoves(); return; } // niets te doen
+  for (const w of getOppPool()) dispatchOpp(w);
+  renderMoves();
+  updateOppInfo();
+}
+
+// Fase 2: de rest van de zettenlijst aan de wachtrij toevoegen — alleen
+// zinvol als geen top-200-rij een time-out had (anders kost elke extra rij
+// 5 s zonder uitputtend antwoord).
+function promoteSecondary() {
+  if (!oppJob || oppJob.timedOut || !oppJob.secondary.length) return false;
+  for (const m of oppJob.secondary) m.oppQueued = true;
+  oppJob.rows.push(...oppJob.secondary);
+  oppJob.secondary = [];
+  return true;
+}
+
+// Geef deze worker de volgende wachtende rij, of parkeer hem als idle.
+function dispatchOpp(w) {
+  const job = oppJob;
+  if (!job) return;
+  if (job.next >= job.rows.length) { job.idle.push(w); return; }
+  const i = job.next++;
+  const m = job.rows[i];
+  w.postMessage({
+    type: 'opp-row-start', id: job.id, index: i,
+    board: job.board, rack: job.rack, variant: job.variant,
+    move: { placed: m.placed },
+    wantOpp: rowNeedsOpp(m), wantSelf: rowNeedsSelf(m),
+  });
+}
+
+function onOppMessage(d, worker) {
+  if (!oppJob || d.id !== oppJob.id) return;
+  const job = oppJob;
+  const m = job.rows[d.index];
+  const pct = (done, total) => Math.min(100, (done / Math.max(1, total)) * 100);
+  if (d.type === 'opp-progress' && m) {
+    if (d.part === 'self') {
+      m.selfLive = { pct: pct(d.done, d.total) };
+      if (m._selfTd) fillSelfCell(m._selfTd, m);
+    } else {
+      m.oppLive = { pct: pct(d.done, d.total) };
+      if (m._oppTd) fillOppCell(m._oppTd, m);
+    }
+  } else if (d.type === 'opp-row' && m) {
+    delete m.oppLive; delete m.selfLive; delete m.oppQueued;
+    if ('max' in d) {
+      m.opp = d.max;
+      m.oppTimedOut = d.timedOut;
+      m.oppPct = pct(d.done, d.total);
+    }
+    if ('selfMax' in d) {
+      m.self = d.selfMax;
+      m.selfMin = d.selfMin;
+      m.selfTimedOut = d.selfTimedOut;
+      m.selfPct = pct(d.selfDone, d.selfTotal);
+    }
+    if (d.timedOut || d.selfTimedOut) job.timedOut = true;
+    if (m._oppTd) fillOppCell(m._oppTd, m);
+    if (m._selfTd) fillSelfCell(m._selfTd, m);
+    job.done++;
+    if (job.done >= job.rows.length && !promoteSecondary()) {
+      oppJob = null; // klaar: alle geplande rijen berekend
+      updateOppInfo();
+      return;
+    }
+    dispatchOpp(worker);
+    while (job.idle.length && job.next < job.rows.length) dispatchOpp(job.idle.pop());
+    updateOppInfo();
+  } else if (d.type === 'opp-error') {
+    $('status').textContent = 'Tegen-berekening mislukt: ' + d.error;
+    cancelOpp();
+  }
+}
+
+// Voortgang naast de kop "Zetten": berekende rijen / geplande rijen.
+function updateOppInfo() {
+  const el = $('oppinfo');
+  if (!oppJob) { el.textContent = ''; return; }
+  const planned = oppJob.rows.length + (oppJob.timedOut ? 0 : oppJob.secondary.length);
+  el.textContent = ` · Tegen ${oppJob.done}/${planned}`;
+}
+
+// Percentage in wetenschappelijke notatie (bijv. 4.4e-3%): vroeg in het spel
+// is het doorzochte deel zó klein dat een afgerond percentage altijd 0% zou tonen.
+const fmtPct = (p) => `${p.toExponential(1)}%`;
+
+// Celinhoud van de Tegen-kolom volgens de berekeningstoestand van deze zet.
+function fillOppCell(td, m) {
+  td.className = 'num oppc';
+  td.title = '';
+  if (typeof m.opp === 'number') {
+    if (m.oppTimedOut) {
+      td.classList.add('dim');
+      td.textContent = `≥${m.opp} · ${fmtPct(m.oppPct)}`;
+      td.title = `Time-out na 5 s: ${fmtPct(m.oppPct)} van de mogelijke rekken doorzocht; beste rek tot dan toe gaf ${m.opp} zetten`;
+    } else {
+      td.textContent = m.opp;
+      td.title = 'Max. aantal antwoordzetten van de tegenstander (alle mogelijke rekken doorzocht)';
+    }
+  } else if (m.oppLive) {
+    td.innerHTML = `<span class="spin"></span><span class="dim"> ${fmtPct(m.oppLive.pct)}</span>`;
+  } else if (m.oppQueued && settings.oppCol) {
+    td.innerHTML = '<span class="spin"></span>';
+  } else {
+    td.classList.add('dim');
+    td.textContent = '—'; // niet (meer) in de berekende selectie
+  }
+}
+
+// Celinhoud van de Zelf-kolom: min–max over de mogelijke bijtrekkingen
+// (één exact getal als min en max samenvallen, zoals altijd bij lege zak).
+function fillSelfCell(td, m) {
+  td.className = 'num selfc';
+  td.title = '';
+  if (typeof m.self === 'number') {
+    if (m.selfTimedOut) {
+      td.classList.add('dim');
+      td.textContent = `≥${m.self} · ${fmtPct(m.selfPct)}`;
+      td.title = `Time-out na 5 s: ${fmtPct(m.selfPct)} van de mogelijke bijtrekkingen doorzocht; beste tot dan toe gaf ${m.self} vervolgzetten`;
+    } else if (m.selfMin === m.self) {
+      td.textContent = m.self;
+      td.title = 'Exact aantal eigen vervolgzetten na deze zet (elke mogelijke bijtrekking geeft hetzelfde aantal)';
+    } else {
+      td.textContent = `${m.selfMin}–${m.self}`;
+      td.title = `Eigen vervolgzetten na deze zet, afhankelijk van wat je bijtrekt: minimaal ${m.selfMin}, maximaal ${m.self}`;
+    }
+  } else if (m.selfLive) {
+    td.innerHTML = `<span class="spin"></span><span class="dim"> ${fmtPct(m.selfLive.pct)}</span>`;
+  } else if (m.oppQueued && settings.selfCol) {
+    td.innerHTML = '<span class="spin"></span>';
+  } else {
+    td.classList.add('dim');
+    td.textContent = '—'; // niet (meer) in de berekende selectie
+  }
+}
+
+// ---- toetsenbord ----
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if ($('keepdlg').open) return; // Esc in de dialoog mag de selectie niet wissen
+  if (e.key === 'Tab') { e.preventDefault(); mode = mode === 'bonus' ? 'letter' : 'bonus'; pendingBonus = ''; render(); return; }
+  if (wordSel) {
+    if (e.key === 'Escape') { wordSel = null; sel = null; pendingBonus = ''; render(); updateWordSelUI(); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); $('wdel').click(); return; }
+  }
+  if (!sel) return;
+  const move = (dr, dc) => { sel = { r: Math.min(14, Math.max(0, sel.r + dr)), c: Math.min(14, Math.max(0, sel.c + dc)) }; };
+
+  if (e.key === 'ArrowUp') { move(-1, 0); pendingBonus = ''; e.preventDefault(); render(); return; }
+  if (e.key === 'ArrowDown') { move(1, 0); pendingBonus = ''; e.preventDefault(); render(); return; }
+  if (e.key === 'ArrowLeft') { move(0, -1); pendingBonus = ''; e.preventDefault(); render(); return; }
+  if (e.key === 'ArrowRight') { move(0, 1); pendingBonus = ''; e.preventDefault(); render(); return; }
+  if (e.key === 'Escape') { sel = null; pendingBonus = ''; render(); return; }
+
+  const i = idx(sel.r, sel.c);
+  const b = game.board;
+
+  if (mode === 'bonus') {
+    const k = e.key.toLowerCase();
+    if (k === 'd' || k === 't') { pendingBonus = k; $('status').textContent = k.toUpperCase() + '…'; return; }
+    if ((k === 'l' || k === 'w') && pendingBonus) {
+      b.bonus[i] = pendingBonus + k;
+      pendingBonus = '';
+      clearPreview(); touch();
+      return;
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete' || k === '0') { b.bonus[i] = ''; pendingBonus = ''; clearPreview(); touch(); }
+    return;
+  }
+
+  // lettermodus
+  const k = e.key.toLowerCase();
+  if (/^[a-z]$/.test(k) && k.length === 1 && e.key.length === 1) {
+    // Blanco-inferentie bij invoer: zijn alle echte exemplaren van deze
+    // letter al in het spel maar is er nog een blanco onverklaard, dan móét
+    // dit een blanco zijn (van de tegenstander, anders lag hij in je rack).
+    // Direct als blanco markeren — zelfde effect als *; * draait het terug.
+    b.tiles[i] = null; // een eventuele oude steen op dit vak telt niet mee
+    const { left } = poolCount();
+    const blank = left[k] === 0 && left['?'] > 0;
+    b.tiles[i] = { letter: k, blank };
+    if (blank) $('status').textContent =
+      `alle ${curVariant().counts[k]}× ${k.toUpperCase()} zijn al in het spel — steen als blanco gemarkeerd (druk * om dat terug te draaien)`;
+    if (dir === 'h') move(0, 1); else move(1, 0);
+    clearPreview(); touch();
+    return;
+  }
+  if (e.key === '*') {
+    if (b.tiles[i]) { b.tiles[i].blank = !b.tiles[i].blank; clearPreview(); touch(); }
+    return;
+  }
+  if (e.key === ' ') { e.preventDefault(); if (dir === 'h') move(0, 1); else move(1, 0); render(); return; }
+  if (e.key === 'Backspace') {
+    if (b.tiles[i]) { b.tiles[i] = null; }
+    else { if (dir === 'h') move(0, -1); else move(-1, 0); b.tiles[idx(sel.r, sel.c)] = null; }
+    clearPreview(); touch();
+    return;
+  }
+  if (e.key === 'Delete') { b.tiles[i] = null; clearPreview(); touch(); }
+});
+
+// ---- knoppen ----
+$('set-adjonly').checked = settings.adjOnly;
+$('set-adjonly').addEventListener('change', (e) => {
+  settings.adjOnly = e.target.checked;
+  localStorage.setItem('adjOnly', settings.adjOnly ? '1' : '0');
+  if (allMoves.length) { applyFilter(); render(); startOpp(); } // render(): ghost weg als de voorproef wegvalt
+});
+
+$('movetable').classList.toggle('noopp', !settings.oppCol);
+$('set-oppcol').checked = settings.oppCol;
+$('set-oppcol').addEventListener('change', (e) => {
+  settings.oppCol = e.target.checked;
+  localStorage.setItem('oppCol', settings.oppCol ? '1' : '0');
+  $('movetable').classList.toggle('noopp', !settings.oppCol);
+  startOpp(); // herstart met wat er nu nodig is; niets nodig = alleen cancel
+});
+$('movetable').classList.toggle('noself', !settings.selfCol);
+$('set-selfcol').checked = settings.selfCol;
+$('set-selfcol').addEventListener('change', (e) => {
+  settings.selfCol = e.target.checked;
+  localStorage.setItem('selfCol', settings.selfCol ? '1' : '0');
+  $('movetable').classList.toggle('noself', !settings.selfCol);
+  startOpp();
+});
+
+$('mode-bonus').addEventListener('click', () => { mode = 'bonus'; render(); });
+$('mode-letter').addEventListener('click', () => { mode = 'letter'; render(); });
+
+$('clearbonus').addEventListener('click', () => {
+  if (!confirm('Alle bonusvelden wissen?')) return;
+  game.board.bonus = Array(225).fill('');
+  clearPreview(); touch();
+});
+
+$('stdbonus').addEventListener('click', async () => {
+  const r = await fetch('/api/standard-bonus?variant=' + (game.variant || 'wordfeud'));
+  game.board.bonus = (await r.json()).bonus;
+  clearPreview(); touch();
+});
+
+// Spelvariant (per spel opgeslagen). Berekening en scores hangen aan de
+// letterset, dus een oude zettenlijst is na het omzetten waardeloos: leegmaken.
+for (const el of document.querySelectorAll('input[name="set-variant"]')) {
+  el.addEventListener('change', async () => {
+    if (!game || (game.variant || 'wordfeud') === el.value) return;
+    game.variant = el.value;
+    // Nog geen letters gelegd: bonusindeling van de nieuwe variant overnemen.
+    if (!game.board.tiles.some(Boolean)) {
+      const r = await fetch('/api/standard-bonus?variant=' + game.variant);
+      game.board.bonus = (await r.json()).bonus;
+    }
+    cancelOpp();
+    allMoves = []; moves = []; previewIdx = -1; lastSolveRack = '';
+    $('movetable').hidden = true; $('solveinfo').textContent = ''; $('playrow').hidden = true;
+    clearPreview(); touch();
+  });
+}
+
+$('rack').addEventListener('input', (e) => {
+  const clean = e.target.value.toLowerCase().replace(/[^a-z?]/g, '').slice(0, 7);
+  e.target.value = clean;
+  game.rack = clean;
+  $('rackcount').textContent = clean.length;
+  renderPool();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 400);
+});
+
+// De solver draait in een Web Worker (zie solver.worker.mjs): buiten de
+// UI-thread, zodat straks de per-rij opponent-berekening afbreekbaar en met
+// voortgang kan draaien zonder de interface te blokkeren.
+let solverWorker = null;
+let solveSeq = 0;
+const pendingSolves = new Map();
+function getSolverWorker() {
+  if (!solverWorker) {
+    solverWorker = new Worker('/solver.worker.mjs', { type: 'module' });
+    solverWorker.onmessage = (e) => {
+      if (String(e.data.type || '').startsWith('opp-')) { onOppMessage(e.data, solverWorker); return; }
+      const p = pendingSolves.get(e.data.id);
+      if (!p) return;
+      pendingSolves.delete(e.data.id);
+      if (e.data.type === 'error') p.reject(new Error(e.data.error));
+      else p.resolve(e.data);
+    };
+    solverWorker.onerror = (e) => {
+      for (const p of pendingSolves.values()) p.reject(new Error(e.message || 'worker-fout'));
+      pendingSolves.clear();
+    };
+  }
+  return solverWorker;
+}
+function solveInWorker(board, rack) {
+  const id = ++solveSeq;
+  return new Promise((resolve, reject) => {
+    pendingSolves.set(id, { resolve, reject });
+    getSolverWorker().postMessage({ type: 'solve', id, board, rack, variant: game.variant || 'wordfeud' });
+  });
+}
+
+$('solve').addEventListener('click', async () => {
+  if (!(game.rack || '').length) { $('status').textContent = 'vul eerst je letters in'; return; }
+  cancelOpp(); // oude Tegen-berekening niet laten doorrekenen op de nieuwe solve
+  $('solve').disabled = true;
+  $('solveinfo').textContent = '…rekenen';
+  try {
+    const data = await solveInWorker(game.board, game.rack);
+    allMoves = data.moves;
+    for (const m of allMoves) {
+      m.adj = adjCount(m); m.len = m.word.length; m.own = m.placed.length;
+      m.open = openCount(m);
+      m.allAdj = m.placed.every(touchesBoard);
+    }
+    lastMs = data.ms;
+    sortKey = 'score'; sortAsc = false;
+    previewIdx = -1;
+    lastSolveRack = game.rack || '';
+    applyFilter(); render();
+    startOpp();
+  } catch (e) {
+    $('solveinfo').textContent = 'fout: ' + e.message;
+  } finally {
+    $('solve').disabled = false;
+  }
+});
+
+$('playmove').addEventListener('click', () => {
+  const m = moves[previewIdx];
+  if (!m) return;
+  let rack = game.rack || '';
+  for (const p of m.placed) {
+    game.board.tiles[idx(p.row, p.col)] = { letter: p.letter, blank: p.blank, own: true };
+    rack = rack.replace(p.blank ? '?' : p.letter, '');
+  }
+  // Eigen zet in de Stand bijschrijven; de score komt uit de zettenlijst.
+  (game.history ??= []).push({
+    player: 'own', word: m.word, score: m.score,
+    cells: m.placed.map((p) => idx(p.row, p.col)),
+  });
+  game.rack = rack;
+  $('rack').value = rack;
+  clearPreview(); touch();
+});
+
+$('newgame').addEventListener('click', async () => {
+  const name = prompt('Naam van het nieuwe spel:', 'Spel ' + new Date().toLocaleDateString('nl-NL'));
+  if (name === null) return;
+  const r = await fetch('/api/new', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  applyState(await r.json());
+});
+
+$('gamesel').addEventListener('change', async (e) => {
+  const r = await fetch('/api/select', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: e.target.value }),
+  });
+  applyState(await r.json());
+});
+
+function applyState(st) {
+  game = st.game;
+  games = st.games;
+  sel = null; wordSel = null; drag = null; updateWordSelUI(); clearPreview();
+  $('rack').value = game.rack || '';
+  render();
+}
+
+// ---- init ----
+fetch('/api/state').then((r) => r.json()).then(applyState);
+</script>
+</body>
+</html>
