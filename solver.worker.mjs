@@ -3,19 +3,29 @@
 // buiten de UI-thread — afbreekbaar en met voortgangsberichten.
 //
 // De solver is puur en DOM-vrij, dus dezelfde module die server.mjs en de
-// tests gebruiken draait hier ongewijzigd.
+// tests gebruiken draait hier ongewijzigd. Relatieve URL: de site staat onder
+// /wordfeud-solver/, de dev-server serveert alles vanaf de root.
 import {
-  buildTrie, findMoves, applyMove,
+  buildTrie, findMoves, applyMove, removeWord,
   remainingPool, distinctRacks, countDistinctRacks, makeMoveCounter,
-} from '/solver.mjs';
+} from './solver.mjs?v=2cf6e84225';
 
-// De trie eenmalig bouwen uit de (gecureerde) lijst van de server.
+// De woordenlijst komt van de pagina: die laadt hem één keer (store.loadWords;
+// dev van de server, de site van OpenTaal) en stuurt de tekst ({type:
+// 'words'}) naar elke worker, of {type: 'words-error'} als laden mislukt. De
+// trie wordt eenmalig gebouwd; daarna meldt de worker 'trie-ready'.
+let wordsResolve, wordsReject;
+const wordsPromise = new Promise((res, rej) => { wordsResolve = res; wordsReject = rej; });
 let triePromise = null;
 function getTrie() {
   if (!triePromise) {
-    triePromise = fetch('/api/words')
-      .then((r) => r.text())
-      .then((txt) => buildTrie(txt.split('\n').filter(Boolean)));
+    triePromise = wordsPromise.then((txt) => {
+      const t0 = Date.now();
+      const trie = buildTrie(txt.split('\n').filter(Boolean));
+      self.postMessage({ type: 'trie-ready', ms: Date.now() - t0 });
+      return trie;
+    });
+    triePromise.catch(() => {}); // de fout komt per solve/rij terug, niet als unhandled
   }
   return triePromise;
 }
@@ -94,7 +104,13 @@ async function runOppRow(msg) {
 
 self.onmessage = async (e) => {
   const msg = e.data;
-  if (msg.type === 'warmup') { getTrie(); return; } // trie alvast bouwen bij poolcreatie
+  if (msg.type === 'words') { wordsResolve(String(msg.text || '')); getTrie(); return; }
+  if (msg.type === 'words-error') { wordsReject(new Error(msg.error || 'woordenlijst laden mislukt')); getTrie(); return; }
+  if (msg.type === 'remove-word') {
+    // Geschrapt woord ook uit deze trie; komt het vóór de lijst, dan wacht het erop.
+    getTrie().then((t) => removeWord(t, String(msg.word || ''))).catch(() => {});
+    return;
+  }
   if (msg.type === 'opp-row-start') {
     activeOppId = msg.id;
     runOppRow(msg).catch((err) => {
@@ -111,7 +127,7 @@ self.onmessage = async (e) => {
   try {
     const trie = await getTrie();
     const t = Date.now();
-    // limit: Infinity — pariteit met de oude /api/solve (alle geldige zetten).
+    // limit: Infinity — alle geldige zetten (zoals de oude server-solve).
     const moves = findMoves(msg.board, msg.rack, trie, { limit: Infinity, variant: msg.variant });
     self.postMessage({ type: 'solved', id: msg.id, moves, ms: Date.now() - t });
   } catch (err) {

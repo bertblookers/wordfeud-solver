@@ -1,5 +1,6 @@
 // Wordfeud-solver: trie + anchor/cross-check zetgeneratie (Appel–Jacobson-stijl).
-// Puur en DOM-vrij; wordt gebruikt door server.mjs en de tests.
+// Puur en DOM-vrij; wordt gebruikt door server.mjs, de browser (worker en
+// store) en de tests.
 //
 // Bord-representatie:
 //   { size: 15,
@@ -19,7 +20,7 @@ export const LETTER_COUNTS = {
 };
 
 // Spelvarianten. Scrabble-NL: officiële verdeling sinds 1998 (102 stenen),
-// bingo +50 i.p.v. +40. De bordindeling hoort bij de server/UI, niet hier.
+// bingo +50 i.p.v. +40. De bordindeling: standardBonus() hieronder.
 export const VARIANTS = {
   wordfeud: { values: LETTER_VALUES, counts: LETTER_COUNTS, bingo: 40 },
   scrabble: {
@@ -83,6 +84,68 @@ export function emptyBoard(size = 15) {
     bonus: Array(size * size).fill(''),
     tiles: Array(size * size).fill(null),
   };
+}
+
+// ---- standaard bonuslayouts (bewerkbaar in de UI) ----
+// Kwart t/m middenrij/kolom; wordt in beide richtingen gespiegeld. Hier (puur)
+// zodat de server en de browser-store dezelfde indeling geven.
+export const BONUS_QUARTERS = {
+  wordfeud: [
+    [0, 0, 'tl'], [0, 4, 'tw'], [0, 7, 'dl'],
+    [1, 1, 'dl'], [1, 5, 'tl'],
+    [2, 2, 'dw'], [2, 6, 'dl'],
+    [3, 3, 'tl'], [3, 7, 'dw'],
+    [4, 0, 'tw'], [4, 4, 'dw'], [4, 6, 'dl'],
+    [5, 1, 'tl'], [5, 5, 'tl'],
+    [6, 2, 'dl'], [6, 4, 'dl'],
+    [7, 0, 'dl'], [7, 3, 'dw'],
+  ],
+  // Officieel Scrabble-bord (vaste indeling; middenvak = dubbele woordwaarde).
+  scrabble: [
+    [0, 0, 'tw'], [0, 3, 'dl'], [0, 7, 'tw'],
+    [1, 1, 'dw'], [1, 5, 'tl'],
+    [2, 2, 'dw'], [2, 6, 'dl'],
+    [3, 0, 'dl'], [3, 3, 'dw'], [3, 7, 'dl'],
+    [4, 4, 'dw'],
+    [5, 1, 'tl'], [5, 5, 'tl'],
+    [6, 2, 'dl'], [6, 6, 'dl'],
+    [7, 0, 'tw'], [7, 3, 'dl'], [7, 7, 'dw'],
+  ],
+};
+export function standardBonus(size = 15, variant = 'wordfeud') {
+  const b = Array(size * size).fill('');
+  const q = BONUS_QUARTERS[variant] ?? BONUS_QUARTERS.wordfeud;
+  for (const [r, c, v] of q)
+    for (const rr of new Set([r, size - 1 - r]))
+      for (const cc of new Set([c, size - 1 - c]))
+        b[rr * size + cc] = v;
+  return b;
+}
+
+// ---- de OpenTaal-lijst filteren tot Wordfeud-speelbare woorden ----
+// Regels (tools/filter-wordlist.mjs voor de lokale lijst, store-browser.mjs
+// voor de site; één functie zodat ze niet uiteenlopen):
+// - woorden met een hoofdletter (afkortingen, eigennamen) vervallen
+// - diacrieten worden genormaliseerd (café -> cafe), zoals Wordfeud zelf doet
+// - alleen a-z, lengte 2..15 (bordmaat), geen koppeltekens/apostrofs/spaties
+// - dubbelen na normalisatie vervallen
+// `removed` (Set of array): woorden die er daarna ook uit blijven.
+// Geeft { words: gesorteerd, dropped: {case, chars, len, removed} }.
+export function filterWords(text, removed = []) {
+  const rm = removed instanceof Set ? removed : new Set(removed);
+  const out = new Set();
+  const dropped = { case: 0, chars: 0, len: 0, removed: 0 };
+  for (let w of String(text).split('\n')) {
+    w = w.trim();
+    if (!w) continue;
+    if (/[A-Z\u00c0-\u00de]/.test(w)) { dropped.case++; continue; }       // hoofdletter ergens
+    const norm = w.normalize('NFD').replace(/[\u0300-\u036f]/g, '');     // é -> e enz.
+    if (!/^[a-z]+$/.test(norm)) { dropped.chars++; continue; }          // koppelteken, apostrof, spatie, cijfer
+    if (norm.length < 2 || norm.length > 15) { dropped.len++; continue; }
+    if (rm.has(norm)) { dropped.removed++; continue; }
+    out.add(norm);
+  }
+  return { words: [...out].sort(), dropped };
 }
 
 function tileValue(t, values) {

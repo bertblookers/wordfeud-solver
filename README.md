@@ -1,44 +1,24 @@
 # Wordfeud solver
 
-A local web app that recreates a Wordfeud game (or a game of Dutch
-Scrabble on a real board) and lists the best-scoring moves, using the
+**Use it: <https://bertblookers.github.io/wordfeud-solver/>** (*a work in
+progress*)
+
+A web app that recreates a Wordfeud game (or a game of Dutch Scrabble on a
+real board) and lists the best-scoring moves, using the
 [OpenTaal](https://github.com/OpenTaal/opentaal-wordlist) Dutch word list.
 The interface is in Dutch.
 
-It runs on your own computer: a small Node.js server with no dependencies,
-bound to `127.0.0.1`, so nothing is open to the network. Your games and the
-word list stay in a local `data/` folder, which git ignores.
-
-## Requirements
-
-- [Node.js](https://nodejs.org/) 22 or later.
-- `curl`, to download the word list (built into Windows 10 and later, macOS
-  and most Linux systems).
-
-## Start
-
-On Windows, run `run.bat`. On its first start it downloads the word list,
-filters it, then starts the server and opens the page in your browser.
-
-On other systems, or by hand:
-
-```
-mkdir -p data
-curl -L -o data/wordlist.txt https://raw.githubusercontent.com/OpenTaal/opentaal-wordlist/master/wordlist.txt
-node tools/filter-wordlist.mjs
-node server.mjs
-```
-
-Then open <http://127.0.0.1:6789/>. The `PORT` and `HOST` environment
-variables change the port and the address. Keep `HOST` at `127.0.0.1`: the
-server saves games and edits the word list for anyone who can reach it, with
-no login.
+It runs entirely in your browser: no account, no install, no server of its
+own. Your games and the words you remove are saved in your browser's own
+storage on your device and never leave it. The page sends no analytics; the
+only download beyond the page itself is the word list.
 
 ## What it does
 
 - **Board.** Set the bonus squares (`DL`, `TL`, `DW`, `TW`) one square at a
   time, or start from the standard Wordfeud or Scrabble layout. Type the
-  letters on the board; `*` marks a tile as a blank.
+  letters on the board (on a phone, tap a square to open the keyboard); `*`
+  marks a tile as a blank.
 - **Rack** ("Jouw letters"): up to 7 letters, `?` for a blank.
 - **Best moves** ("Beste zetten"): every legal move with its score and
   position. Click one to preview it on the board; "Zet spelen" plays it.
@@ -56,35 +36,40 @@ no login.
 - **Variants** ("Instellingen"): Wordfeud (104 tiles, bingo +40) or the Dutch
   Scrabble set (102 tiles, bingo +50), set per game.
 - **Word list curation.** When Wordfeud rejects a suggested word, the bin
-  icon removes it from `data/words.txt` and logs it in `data/removed.txt`,
-  so it stays out when the list is filtered again.
-- Games are saved as you go, in `data/games/`. "Nieuw spel" starts a new
-  game; older games stay in the list.
+  icon removes it from your copy of the list; your removals are kept in your
+  browser.
+- Games are saved as you go. "Nieuw spel" starts a new game; older games
+  stay in the list.
 
 ## The word list
 
 - Source: the [OpenTaal word list](https://github.com/OpenTaal/opentaal-wordlist),
-  offered under the BSD 3-Clause License or CC BY 3.0. It is not included in
-  this repository: `run.bat`, or the commands above, download it to
-  `data/wordlist.txt`.
-- `node tools/filter-wordlist.mjs` writes `data/words.txt`: it drops words
-  with a capital letter (abbreviations, names), takes the accents off
-  (`café` becomes `cafe`, as Wordfeud does), keeps `a` to `z` only and
-  lengths 2 to 15, and leaves out the words in `data/removed.txt`.
+  offered under the BSD 3-Clause License or CC BY 3.0. It is not in this
+  repository: on your first visit, your browser downloads OpenTaal's
+  `wordlist.txt` from OpenTaal's own repository, at one fixed commit
+  (`b250510dda431785f962019167d1415198ff3905`), and checks its SHA-256
+  before using it. If that download fails or doesn't match, it takes the
+  same file at the same commit from jsDelivr.
+- The page then filters it: it drops words with a capital letter
+  (abbreviations, names), takes the accents off (`café` becomes `cafe`, as
+  Wordfeud does), keeps `a` to `z` only and lengths 2 to 15, and leaves out
+  doubles. The filtered list stays in your browser's cache, so a later visit
+  doesn't download it again.
 - OpenTaal is not Wordfeud's own word list, so now and then a word differs:
   accepted here but not in Wordfeud, or the other way round.
 
 ## How it works
 
+- `index.html`: the whole interface in one file, plain JavaScript.
 - `solver.mjs`: the move generator, pure and without I/O: a trie and
   anchor squares with cross-checks (Appel and Jacobson's method), scoring,
-  blanks, the tile sets of both variants and the opponent analysis.
-- `server.mjs`: a dependency-free HTTP server for the page, a JSON API and
-  the saved games.
-- `public/index.html`: the whole interface in one file, plain JavaScript.
-- `public/solver.worker.mjs`: a Web Worker that builds its own trie in the
-  browser and runs the search, and the "Tegen" and "Zelf" columns, outside
-  the page's main thread.
+  blanks, the tile sets of both variants, the opponent analysis and the word
+  list filter.
+- `solver.worker.mjs`: a Web Worker that builds its own trie and runs the
+  search, and the "Tegen" and "Zelf" columns, outside the page's main
+  thread.
+- `store-browser.mjs`: the saved games and removed words in your browser's
+  storage, and the word list loader.
 
 ## Data & attribution
 

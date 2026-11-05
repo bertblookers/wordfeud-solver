@@ -4,14 +4,26 @@
 <meta charset="utf-8">
 <title>Wordfeud-solver</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
   :root {
-    --cell: 38px;
+    /* Het bord past in de breedte: 15 vakjes + rijlabel (22px) + 15 gaten (30px)
+       + de body-padding aan twee kanten. Op een desktop blijft het 38px. */
+    --pad: 18px;
+    --cell: min(38px, calc((100vw - 2 * var(--pad) - 52px) / 15));
     --bg: #1e2229; --panel: #262b34; --line: #3a4150; --text: #e8eaf0; --dim: #9aa3b5;
     --tile: #f2d8a0; --ghost: #7fb2f0; --own: #aef2a0; --opp: #f2a0a0;
   }
+  @media (max-width: 480px) { :root { --pad: 8px; } }
   * { box-sizing: border-box; }
   #boardwrap { position: relative; }
+  /* Telefoon: een tik op een vakje focust dit veld, zodat het schermtoetsenbord opent.
+     Onzichtbaar maar niet display:none (dat krijgt geen focus); 16px zodat iOS niet inzoomt. */
+  #boardkeys {
+    position: absolute; left: 0; top: 0; width: 1px; height: 1px; padding: 0; border: 0;
+    opacity: 0; font-size: 16px; color: transparent; caret-color: transparent; background: transparent;
+    pointer-events: none; user-select: text; -webkit-user-select: text;
+  }
   .cell.wsel { outline: 3px solid #e05050; outline-offset: -2px; z-index: 2; }
   #selbtns { position: absolute; display: none; z-index: 5; gap: 6px; }
   #selbtns button { font-weight: 700; padding: 4px 8px; white-space: nowrap; }
@@ -41,7 +53,7 @@
   dialog p { margin: 0 0 12px; }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   body {
-    margin: 0; padding: 18px; background: var(--bg); color: var(--text);
+    margin: 0; padding: var(--pad); background: var(--bg); color: var(--text);
     font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
     display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start;
   }
@@ -55,6 +67,7 @@
     width: var(--cell); height: var(--cell); background: #303645; border-radius: 4px;
     display: flex; align-items: center; justify-content: center; position: relative;
     cursor: pointer; font-size: 10px; color: #cfd6e4; font-weight: 600;
+    touch-action: manipulation; /* twee tikken op één vakje = richting wisselen, niet inzoomen */
   }
   .cell.dl { background: #3d6b4f; } .cell.tl { background: #2d5a86; }
   .cell.dw { background: #8a5a2d; } .cell.tw { background: #8a3030; }
@@ -153,6 +166,8 @@
   #status { color: var(--dim); font-size: 12px; min-height: 16px; }
   kbd { background: #333a48; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 11px; }
   .help { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  #credits { flex-basis: 100%; color: var(--dim); font-size: 12px; max-width: 1060px; }
+  #credits a { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -161,6 +176,7 @@
   <h1>Wordfeud-solver</h1>
   <div id="collabels"></div>
   <div id="board"></div>
+  <input id="boardkeys" type="text" aria-label="Letters voor het bord" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done">
   <div id="status"></div>
   <div id="selbtns">
     <span id="ownpill">
@@ -281,6 +297,16 @@
   </div>
 </div>
 
+<footer id="credits">
+  Woordenlijst: de <a href="https://github.com/OpenTaal/opentaal-wordlist">OpenTaal-woordenlijst</a>
+  van OpenTaal, onder de <a href="https://opensource.org/licenses/BSD-3-Clause">BSD-3-licentie</a>
+  en/of <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>. Hier gefilterd:
+  woorden met een hoofdletter vervallen, accenten gaan eraf (café → cafe), alleen a–z,
+  2 tot 15 letters, zonder dubbelen. Broncode:
+  <a href="https://github.com/bertblookers/wordfeud-solver">AGPL-3.0</a>.
+</footer>
+
+<!-- Opslag: zonder WF_STORE gebruikt de pagina de browser-store; de dev-versie kiest hieronder de server-store. -->
 <script>
 const SIZE = 15;
 // Letterwaarden en steenverdelingen per spelvariant — gelijk houden aan
@@ -308,10 +334,34 @@ let allMoves = [];        // volledige solve-uitkomst
 let moves = [];           // wat de tabel toont (allMoves, evt. gefilterd)
 let lastMs = 0;
 let previewIdx = -1;
+// ---- instellingen in localStorage ----
+// prefs:begin (test/page.test.mjs voert dit blok uit tegen een nep-opslag)
+// Elke sleutel krijgt het voorvoegsel van de site, want alle bertblookers-
+// sites delen één origin. Een oude sleutel zonder voorvoegsel (adjOnly,
+// oppCol, selfCol) gaat bij de eerste keer lezen één keer over.
+const PREF_PREFIX = 'wordfeud-solver:';
+function prefGet(k) {
+  try {
+    let v = localStorage.getItem(PREF_PREFIX + k);
+    if (v === null) {
+      const old = localStorage.getItem(k);
+      if (old !== null) {
+        localStorage.setItem(PREF_PREFIX + k, old);
+        localStorage.removeItem(k);
+        v = old;
+      }
+    }
+    return v;
+  } catch { return null; }
+}
+function prefSet(k, v) {
+  try { localStorage.setItem(PREF_PREFIX + k, v); } catch { /* niet bewaard */ }
+}
+// prefs:end
 const settings = {
-  adjOnly: localStorage.getItem('adjOnly') === '1',
-  oppCol: localStorage.getItem('oppCol') === '1',
-  selfCol: localStorage.getItem('selfCol') === '1',
+  adjOnly: prefGet('adjOnly') === '1',
+  oppCol: prefGet('oppCol') === '1',
+  selfCol: prefGet('selfCol') === '1',
 };
 let saveTimer = null;
 let wordSel = null;       // {r0,c0,r1,c1} genormaliseerd — sleep-selectie van een bordwoord
@@ -324,7 +374,10 @@ const idx = (r, c) => r * SIZE + c;
 
 // ---- opbouw grid ----
 const boardEl = $('board');
+const boardKeys = $('boardkeys');
 const cells = [];
+let lastPointer = 'mouse'; // 'touch' | 'pen' | 'mouse': alleen een tik focust het verborgen veld
+boardEl.addEventListener('pointerdown', (e) => { lastPointer = e.pointerType; });
 {
   const lab = $('collabels');
   lab.appendChild(document.createElement('div'));
@@ -497,7 +550,44 @@ function renderOppRack(left, values) {
 // gelegde stenen en scoreMove uit solver.mjs berekent de score op het bord
 // zónder die stenen (bonussen tellen zo alleen op de nieuwe stenen).
 let solverModPromise = null;
-const loadSolver = () => (solverModPromise ??= import('/solver.mjs'));
+const loadSolver = () => (solverModPromise ??= import('./solver.mjs?v=2cf6e84225'));
+
+// De opslag: de server-store in dev (gezet door de dev-only regel vóór
+// dit script), anders store-browser.mjs (de site: spellen in de browser, de
+// woordenlijst van OpenTaal). Zelfde interface; zie die bestanden.
+const storeReady = (async () => {
+  const solver = await loadSolver();
+  const mod = await import(globalThis.WF_STORE || './store-browser.mjs?v=2cf6e84225');
+  return mod.createStore({ solver });
+})();
+
+// ---- woordenlijst naar de workers ----
+// De pagina laadt de lijst één keer (store.loadWords) en stuurt de tekst naar
+// elke worker ({type: 'words'}), die er zijn eigen trie mee bouwt en
+// 'trie-ready' meldt. Woorden die deze sessie geschrapt zijn, gaan ook naar
+// een worker die later bijkomt.
+const LOADING_WORDS = 'woordenlijst laden…';
+let wordsPromise = null;
+const removedThisSession = [];
+function loadWords() {
+  if (!wordsPromise) {
+    wordsPromise = storeReady.then((s) => s.loadWords());
+    wordsPromise.catch((e) => { $('status').textContent = 'woordenlijst laden mislukt: ' + e.message; });
+  }
+  return wordsPromise;
+}
+function feedWorker(w) {
+  loadWords().then(
+    (text) => {
+      w.postMessage({ type: 'words', text });
+      for (const word of removedThisSession) w.postMessage({ type: 'remove-word', word });
+    },
+    (e) => w.postMessage({ type: 'words-error', error: e.message }),
+  );
+}
+function onTrieReady() {
+  if ($('status').textContent === LOADING_WORDS) $('status').textContent = '';
+}
 
 function assignedCells() {
   const s = new Set();
@@ -668,6 +758,20 @@ function onCellClick(r, c) {
   }
   pendingBonus = '';
   render();
+  // Desktop: het document blijft de toetsen lezen (keydown). Telefoon: zonder
+  // gefocust invoerveld opent geen schermtoetsenbord.
+  if (lastPointer === 'touch' || lastPointer === 'pen') { placeBoardKeys(true); boardKeys.focus(); }
+}
+
+// Het verborgen veld staat op het geselecteerde vakje, zodat de browser bij
+// focus en typen naar dat vakje scrollt (het schermtoetsenbord dekt de helft).
+function placeBoardKeys(force) {
+  if (!force && document.activeElement !== boardKeys) return;
+  if (!sel) { boardKeys.blur(); return; }
+  const wrap = $('boardwrap').getBoundingClientRect();
+  const rc = cells[idx(sel.r, sel.c)].getBoundingClientRect();
+  boardKeys.style.left = (rc.left - wrap.left) + 'px';
+  boardKeys.style.top = (rc.top - wrap.top) + 'px';
 }
 
 // ---- renderen ----
@@ -709,6 +813,7 @@ function render() {
       }
     }
   }
+  placeBoardKeys();
 
   $('mode-bonus').classList.toggle('active', mode === 'bonus');
   $('mode-letter').classList.toggle('active', mode === 'letter');
@@ -867,17 +972,16 @@ function renderMoves() {
   });
 }
 
-// Woord schrappen dat Wordfeud niet accepteert: uit words.txt + removed.txt
-// op de server, en alle zetten met dat woord uit de huidige lijst.
+// Woord schrappen dat Wordfeud niet accepteert: via de store (dev: uit
+// words.txt + removed.txt op de server; de site: de eigen lijst van de
+// bezoeker), uit de trie van elke worker, en alle zetten met dat woord uit de
+// huidige lijst.
 async function removeWord(word) {
   if (!confirm(`"${word.toUpperCase()}" definitief uit de woordenlijst verwijderen?\n(Voor woorden die Wordfeud niet accepteert.)`)) return false;
   try {
-    const r = await fetch('/api/remove-word', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ word }),
-    });
-    const data = await r.json();
-    if (data.error) throw new Error(data.error);
+    const data = await (await storeReady).removeWord(word);
+    removedThisSession.push(word);
+    for (const w of oppPool ?? (solverWorker ? [solverWorker] : [])) w.postMessage({ type: 'remove-word', word });
     const cur = moves[previewIdx];
     allMoves = allMoves.filter((m) => m.word !== word);
     moves = moves.filter((m) => m.word !== word);
@@ -960,11 +1064,7 @@ function touch() {
 async function save() {
   $('status').textContent = 'opslaan…';
   try {
-    const r = await fetch('/api/save', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ game }),
-    });
-    if (!r.ok) throw new Error((await r.json()).error);
+    await (await storeReady).save(game);
     $('status').textContent = 'opgeslagen';
   } catch (e) {
     $('status').textContent = 'opslaan mislukt: ' + e.message;
@@ -986,17 +1086,18 @@ let oppJobSeq = 0, oppJob = null;
 let lastSolveRack = ''; // rack waarmee de huidige zettenlijst berekend is
 
 // Pool: de bestaande solve-worker (heeft zijn trie al) plus extra workers,
-// elk met een eigen trie (~55 MB, eenmalig ~0,5 s bouwen — 'warmup' start
-// dat alvast). Gemaximeerd zodat er cores overblijven voor UI en systeem.
+// elk met een eigen trie (~59 MB, eenmalig ~0,7-0,9 s bouwen — feedWorker
+// stuurt meteen de lijst, dus dat begint alvast). Gemaximeerd zodat er cores
+// overblijven voor UI en systeem.
 let oppPool = null;
 function getOppPool() {
   if (!oppPool) {
     const n = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
     oppPool = [getSolverWorker()];
     for (let i = 1; i < n; i++) {
-      const w = new Worker('/solver.worker.mjs', { type: 'module' });
+      const w = new Worker('./solver.worker.mjs?v=2cf6e84225', { type: 'module' });
       w.onmessage = (e) => { if (String(e.data.type || '').startsWith('opp-')) onOppMessage(e.data, w); };
-      w.postMessage({ type: 'warmup' });
+      feedWorker(w);
       oppPool.push(w);
     }
   }
@@ -1175,8 +1276,50 @@ function fillSelfCell(td, m) {
 }
 
 // ---- toetsenbord ----
+// boardkeys:begin (test/page.test.mjs voert dit blok uit met een nep-invoerveld)
+// Telefoon: een tik op een vakje focust het verborgen veld #boardkeys (een
+// schermtoetsenbord opent alleen voor een invoerveld). Wat daarin getypt wordt,
+// gaat als losse toetsen naar dezelfde handler als het toetsenbord: letters,
+// *, spatie, Backspace. Android-toetsenborden sturen keydown zonder bruikbare
+// toets ('Unidentified') en bouwen een woord op via compositie ('h', 'hu',
+// 'hui'); het veld houdt daarom wat sinds de laatste reset getypt is, en alleen
+// het verschil met de vorige stand telt (een autocorrectie wordt Backspaces
+// plus de nieuwe letters). Het vaste teken vooraan zorgt dat Backspace op een
+// verder leeg veld toch een input-event geeft; een spatie, zodat een
+// toetsenbord het nooit bij een woord rekent.
+const BK_SENT = ' ';
+// Toetsen met tekst komen via het input-event; keydown laat ze liggen, anders tellen ze dubbel.
+const viaInput = (key) => key.length === 1 || key === 'Backspace' || key === 'Unidentified' || key === 'Process';
+function bindBoardKeys(el, onKey) {
+  let seen = ''; // getypt sinds de laatste reset, al als toetsen verwerkt
+  const reset = () => { el.value = BK_SENT; el.setSelectionRange(BK_SENT.length, BK_SENT.length); seen = ''; };
+  const sync = () => {
+    const v = el.value;
+    const typed = v.startsWith(BK_SENT) ? v.slice(BK_SENT.length) : v;
+    let same = 0;
+    while (same < seen.length && same < typed.length && seen[same] === typed[same]) same++;
+    for (let j = seen.length; j > same; j--) onKey('Backspace');
+    for (const ch of typed.slice(same)) onKey(ch);
+    seen = typed;
+    if (v === '') onKey('Backspace'); // het vaste teken zelf gewist
+  };
+  el.addEventListener('focus', reset);
+  el.addEventListener('input', (e) => { sync(); if (!e.isComposing) reset(); });
+  el.addEventListener('compositionend', () => { sync(); reset(); });
+  reset();
+}
+// boardkeys:end
+bindBoardKeys(boardKeys, (key) => onBoardKey({ key, preventDefault() {} }));
+
 document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.target === boardKeys) {
+    if (e.key === 'Enter') { boardKeys.blur(); return; } // schermtoetsenbord dicht
+    if (viaInput(e.key)) return;
+  } else if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  onBoardKey(e);
+});
+
+function onBoardKey(e) {
   if ($('keepdlg').open) return; // Esc in de dialoog mag de selectie niet wissen
   if (e.key === 'Tab') { e.preventDefault(); mode = mode === 'bonus' ? 'letter' : 'bonus'; pendingBonus = ''; render(); return; }
   if (wordSel) {
@@ -1237,13 +1380,13 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Delete') { b.tiles[i] = null; clearPreview(); touch(); }
-});
+}
 
 // ---- knoppen ----
 $('set-adjonly').checked = settings.adjOnly;
 $('set-adjonly').addEventListener('change', (e) => {
   settings.adjOnly = e.target.checked;
-  localStorage.setItem('adjOnly', settings.adjOnly ? '1' : '0');
+  prefSet('adjOnly', settings.adjOnly ? '1' : '0');
   if (allMoves.length) { applyFilter(); render(); startOpp(); } // render(): ghost weg als de voorproef wegvalt
 });
 
@@ -1251,7 +1394,7 @@ $('movetable').classList.toggle('noopp', !settings.oppCol);
 $('set-oppcol').checked = settings.oppCol;
 $('set-oppcol').addEventListener('change', (e) => {
   settings.oppCol = e.target.checked;
-  localStorage.setItem('oppCol', settings.oppCol ? '1' : '0');
+  prefSet('oppCol', settings.oppCol ? '1' : '0');
   $('movetable').classList.toggle('noopp', !settings.oppCol);
   startOpp(); // herstart met wat er nu nodig is; niets nodig = alleen cancel
 });
@@ -1259,7 +1402,7 @@ $('movetable').classList.toggle('noself', !settings.selfCol);
 $('set-selfcol').checked = settings.selfCol;
 $('set-selfcol').addEventListener('change', (e) => {
   settings.selfCol = e.target.checked;
-  localStorage.setItem('selfCol', settings.selfCol ? '1' : '0');
+  prefSet('selfCol', settings.selfCol ? '1' : '0');
   $('movetable').classList.toggle('noself', !settings.selfCol);
   startOpp();
 });
@@ -1274,8 +1417,7 @@ $('clearbonus').addEventListener('click', () => {
 });
 
 $('stdbonus').addEventListener('click', async () => {
-  const r = await fetch('/api/standard-bonus?variant=' + (game.variant || 'wordfeud'));
-  game.board.bonus = (await r.json()).bonus;
+  game.board.bonus = (await loadSolver()).standardBonus(15, game.variant || 'wordfeud');
   clearPreview(); touch();
 });
 
@@ -1287,8 +1429,7 @@ for (const el of document.querySelectorAll('input[name="set-variant"]')) {
     game.variant = el.value;
     // Nog geen letters gelegd: bonusindeling van de nieuwe variant overnemen.
     if (!game.board.tiles.some(Boolean)) {
-      const r = await fetch('/api/standard-bonus?variant=' + game.variant);
-      game.board.bonus = (await r.json()).bonus;
+      game.board.bonus = (await loadSolver()).standardBonus(15, game.variant);
     }
     cancelOpp();
     allMoves = []; moves = []; previewIdx = -1; lastSolveRack = '';
@@ -1315,8 +1456,9 @@ let solveSeq = 0;
 const pendingSolves = new Map();
 function getSolverWorker() {
   if (!solverWorker) {
-    solverWorker = new Worker('/solver.worker.mjs', { type: 'module' });
+    solverWorker = new Worker('./solver.worker.mjs?v=2cf6e84225', { type: 'module' });
     solverWorker.onmessage = (e) => {
+      if (e.data.type === 'trie-ready') { onTrieReady(); return; }
       if (String(e.data.type || '').startsWith('opp-')) { onOppMessage(e.data, solverWorker); return; }
       const p = pendingSolves.get(e.data.id);
       if (!p) return;
@@ -1328,6 +1470,7 @@ function getSolverWorker() {
       for (const p of pendingSolves.values()) p.reject(new Error(e.message || 'worker-fout'));
       pendingSolves.clear();
     };
+    feedWorker(solverWorker);
   }
   return solverWorker;
 }
@@ -1386,19 +1529,13 @@ $('playmove').addEventListener('click', () => {
 $('newgame').addEventListener('click', async () => {
   const name = prompt('Naam van het nieuwe spel:', 'Spel ' + new Date().toLocaleDateString('nl-NL'));
   if (name === null) return;
-  const r = await fetch('/api/new', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-  applyState(await r.json());
+  try { applyState(await (await storeReady).newGame(name)); }
+  catch (e) { $('status').textContent = 'nieuw spel mislukt: ' + e.message; }
 });
 
 $('gamesel').addEventListener('change', async (e) => {
-  const r = await fetch('/api/select', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ id: e.target.value }),
-  });
-  applyState(await r.json());
+  try { applyState(await (await storeReady).select(e.target.value)); }
+  catch (err) { $('status').textContent = 'spel openen mislukt: ' + err.message; }
 });
 
 function applyState(st) {
@@ -1410,7 +1547,10 @@ function applyState(st) {
 }
 
 // ---- init ----
-fetch('/api/state').then((r) => r.json()).then(applyState);
+$('status').textContent = LOADING_WORDS;
+storeReady.then((s) => s.state()).then(applyState)
+  .catch((e) => { $('status').textContent = 'laden mislukt: ' + e.message; });
+getSolverWorker(); // de woordenlijst laden en de eerste trie alvast bouwen
 </script>
 </body>
 </html>
